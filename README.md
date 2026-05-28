@@ -1,6 +1,14 @@
 # Beacon
 
-An everyday workflow orchestrator.
+An everyday workflow orchestrator that simple and easy to customize.
+
+
+**Components**:
+
+```text
+User --> Web Server -> Runner --> Local Executor --> Task Runner --> Result
+                              --> Any Executor   --> Task Runner --> Result
+```
 
 ---
 
@@ -9,10 +17,12 @@ An everyday workflow orchestrator.
 This is the full example of a workflow that this beacon package support.
 
 ```python
-from beacon import Runner, Workflow, Task, Group, Param, Sensor
+from beacon import Runner, Workflow, Group, Param, Sensor
 from beacon.callbacks import OnStart, OnFailure, OnTaskFailure
 from beacon.providers.msteam import msteam_adaptive_card
 from beacon.providers.smtp import send_mail
+
+from .plugins import Task
 
 
 wf = Workflow(
@@ -28,7 +38,7 @@ wf = Workflow(
     tasks=[
         Sensor(
             id="start",
-            uses="bigquery_check",
+            uses="plugins/cloud_storage_with_prefix",
             inputs={
                 "source_system": "{{ params.source_system }}",
                 "bucket": "my-bucket",
@@ -98,77 +108,14 @@ runner = Runner(
 )
 ```
 
-!!! note "YAML Template"
-
-    You can define workflow via YAML template:
-
-    ```yaml
-    id: hello-world
-    desc: An example workflow description
-    params:
-      - name: source_system
-        type: str
-        default: example
-    callbacks:
-      - on_start:
-          hook: msteam_adaptive_card
-          args:
-            - https://my-webhook-url.com
-      - on_failure:
-          hook: send_mail
-          args:
-            - "on-call@email.com"
-    tasks:
-      - id: start
-        uses: empty
-      - id: extract
-        upstreams: [start]
-        tasks:
-          - id: extract-1
-            uses: bigquery_count
-            inputs:
-              source_system: "{{ params.source_system }}"
-              bucket: my-bucket
-              prefix: "my-prefix/{{ data_interval_start | utc | fmt('year=%Y/month=%m/day=%d/hour=%H') }}"
-            callbacks:
-              - on_task_failure:
-                  hook: send_mail
-                  args:
-                    - "owner@email.com"
-            - id: extract-2
-              upstream: [extract-1]
-              uses: bigquery_count
-              inputs:
-                source_system: "{{ params.source_system }}"
-                bucket: my-bucket
-                prefix: "my-prefix/{{ data_interval_start | utc | fmt('year=%Y/month=%m/day=%d/hour=%H') }}"
-              callbacks:
-                - on_task_failure:
-                    hook: send_mail
-                    args:
-                      - "owner@email.com"
-        - id: end
-          upstream: [extract, start]
-          trigger_rule: all_done
-          uses: send_logs
-          inputs:
-            logs:
-              - task_id: extract-1
-                status: "{{ tasks.extract-1.status }}"
-                records: "{{ tasks.extract-1.outputs.records }}"
-              - task_id: extract-2
-                status: "{{ tasks.extract-2.status }}"
-                records: "{{ tasks.extract-2.outputs.records }}"
-    ```
-
-## Custom Using Task
+## Defining Plugins
 
 ```python
-from typing import Literal
+from typing import Literal, Annotated
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from beacon import BaseBuilder
+from beacon import BasePlugin
 from beacon.models.context import Context
 
 
@@ -178,13 +125,38 @@ class BigQueryCountInput(BaseModel):
     prefix: str
 
 
-class BigQueryCount(BaseBuilder):
+class BigQueryCount(BasePlugin):
     """BigQuery Count Task."""
 
-    using: Literal["str"] = "empty"
+    uses: Literal["str"] = "bigquery_count"
     inputs: BigQueryCountInput
 
     def execute(self, context: Context):
+        print("Start counting bigquery")
         print(self.inputs)  # type: ignore
         print(context["params"]["source_system"])  # type: ignore
+
+
+class CloudStorageWithPrefixInput(BaseModel):
+    source_system: str
+    bucket: str
+    prefix: str
+
+
+class CloudStorageWithPrefix(BasePlugin):
+    """Cloud Storage With Prefix Sensor."""
+
+    uses: Literal["str"] = "cloud_storage_with_prefix"
+    inputs: CloudStorageWithPrefixInput
+
+    def execute(self, context: Context):
+        print("Start checking cloud storage with prefix")
+        print(self.inputs)  # type: ignore
+        print(context["params"]["source_system"])  # type: ignore
+
+
+Task = Annotated[
+    BigQueryCount | CloudStorageWithPrefix,
+    Field(discriminator="uses"),
+]
 ```
