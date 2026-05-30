@@ -13,3 +13,24 @@ dev = [
     "pre-commit>=4.6.0",
     "pytest>=9.0.3",
 ]
+
+[tool.ruff]
+line-length = 80
+exclude = [
+    "__pypackages__",
+    ".__pycache__",
+    ".assets",
+    ".idea",
+    ".vscode",
+    ".git",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".venv",
+    "build",
+    "dist",
+    "venv",
+    "docs",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401", "F403"]
