@@ -8,11 +8,15 @@ def load_all_plugins(package: str | ModuleType):
     `import myapp.plugins`.
 
     Examples:
-        ```python
-        # Load plugins from a package string
-        load_all_plugins("myapp.plugins")
+        Load plugins from a package string
 
-        # Load plugins from a module object
+        ```python
+        load_all_plugins("myapp.plugins")
+        ```
+
+        Load plugins from a module object
+
+        ```python
         import myapp.plugins
         load_all_plugins(myapp.plugins)
         ```
@@ -20,7 +24,7 @@ def load_all_plugins(package: str | ModuleType):
     if isinstance(package, str):
         package = importlib.import_module(package)
 
-    for finder, name, ispkg in pkgutil.walk_packages(
+    for finder, name, is_pkg in pkgutil.walk_packages(
         path=package.__path__,
         prefix=package.__name__ + ".",
     ):

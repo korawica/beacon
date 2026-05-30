@@ -2,16 +2,16 @@ from pydantic import BaseModel, Field
 from typing import Any, Literal
 
 
-class BaseParam(BaseModel): ...
+class Param(BaseModel):
+    """Parameter Model."""
 
-
-class Param(BaseParam):
     name: str = Field(description="A parameter name")
     type: Literal[
         "str",
         "int",
         "float",
         "bool",
+        "choice",
         "array",
         "object",
     ]

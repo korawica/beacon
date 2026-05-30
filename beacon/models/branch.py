@@ -6,12 +6,26 @@ from ..core import BaseAction
 
 
 class Branch(BaseAction):
+    """Branch Action Model.
+
+    !!! example
+
+        ```yaml
+        tasks:
+          - id: example
+            type: branch
+            uses: "branch-plugin"
+            success: ["task1", "task2"]
+            failure: ["task3"]
+        ```
+    """
+
     type: Literal["branch"] = Field(default="branch")
-    success_downstream: list[str] = Field(
+    success: list[str] = Field(
         default_factory=list,
         description="A list of success downstream tasks",
     )
-    failure_downstream: list[str] = Field(
+    failure: list[str] = Field(
         default_factory=list,
         description="A list of failure downstream tasks",
     )

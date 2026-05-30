@@ -6,4 +6,42 @@ from ..core import BaseAction
 
 
 class Sensor(BaseAction):
-    type: Literal["sensor"] = Field(default="sensor")
+    """Sensor Action Model.
+
+    !!! example
+
+        ```yaml
+        tasks:
+          - id: sensor
+            mode: poke
+            check_interval: 5
+            execution_timeout: 60
+            exponential_backoff: true
+            fail_mode: soft
+        ```
+    """
+
+    type: Literal["sensor"] = Field(
+        default="sensor",
+        description="A sensor action type.",
+    )
+    mode: Literal["poke", "reschedule"] = Field(
+        default="poke",
+        description="The mode of the sensor.",
+    )
+    check_interval: int = Field(
+        default=60,
+        description="The interval in seconds that the sensor will poke.",
+    )
+    execution_timeout: int | None = Field(
+        default=None,
+        description="The timeout in seconds for the sensor execution.",
+    )
+    exponential_backoff: bool = Field(
+        default=True,
+        description="Whether or not to exponentially backoff.",
+    )
+    fail_mode: Literal["soft", "silent"] = Field(
+        default="soft",
+        description="A mode of fail event.",
+    )

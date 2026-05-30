@@ -12,7 +12,7 @@ class Task(BaseAction):
 
         ```yaml
         tasks:
-            id: example
+          - id: example
             type: task
             uses: "some-task"
             upstream: ["start"]
