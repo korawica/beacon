@@ -3,6 +3,8 @@ from typing import TypedDict
 
 
 class Context(TypedDict):
+    """Context Typed Dict."""
+
     run_id: str
     run_date: datetime
     logical_date: datetime

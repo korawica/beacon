@@ -4,10 +4,10 @@ from typing import ClassVar, Final, Self, Any
 
 from pydantic import BaseModel
 
-from ..const import PLUGINS_REGISTRY
 from .context import Context
 
 BASE_PLUGIN_NAME: Final[str] = "base"
+PLUGINS_REGISTRY: dict[str, type] = {}
 _lock = threading.Lock()
 
 

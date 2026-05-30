@@ -1,9 +1,9 @@
 from typing import ClassVar, TYPE_CHECKING
 
-from ...core.base import BasePlugin
+from .....core import BasePlugin
 
 if TYPE_CHECKING:
-    from ...core.context import Context
+    from .....core import Context
 
 
 class EmptyPlugin(BasePlugin):

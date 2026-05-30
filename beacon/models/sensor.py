@@ -2,7 +2,7 @@ from typing import Literal
 
 from pydantic import Field
 
-from ..core.action import BaseAction
+from ..core import BaseAction
 
 
 class Sensor(BaseAction):

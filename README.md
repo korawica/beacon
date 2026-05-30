@@ -2,13 +2,6 @@
 
 An everyday workflow orchestrator that simple and easy to customize.
 
-**Components**:
-
-```text
-User --> Web Server -> Runner --> Local Executor --> Task Runner --> Result
-                              --> Any Executor   --> Task Runner --> Result
-```
-
 ---
 
 ## Examples
@@ -18,6 +11,7 @@ This is the full example of a workflow that this beacon package support.
 ```python
 from beacon import Runner, Dag, Group, Param, Sensor, Task
 from beacon.callbacks import OnStart, OnFailure, OnTaskFailure
+from beacon.metadata import SqliteMetadata
 from beacon.providers.msteam import msteam_adaptive_card
 from beacon.providers.smtp import send_mail
 
@@ -44,7 +38,7 @@ dag = Dag(
         ),
         Group(
             id="extract",
-            upstreams=["start"],
+            upstream=["start"],
             tasks=[
                 Task(
                     id="extract-1",
@@ -60,7 +54,7 @@ dag = Dag(
                 ),
                 Task(
                     id="extract-2",
-                    upstreams=["extract-1"],
+                    upstream=["extract-1"],
                     uses="bigquery_count",
                     inputs={
                         "source_system": "{{ params.source_system }}",
@@ -75,7 +69,7 @@ dag = Dag(
         ),
         Task(
             id="end",
-            upstreams=["extract", "start"],
+            upstream=["extract", "start"],
             trigger_rule="all_done",
             uses="send_logs",
             inputs={
@@ -101,17 +95,16 @@ runner = Runner(
     dag=dag,
     data_start_interval="2026-01-01T00:00:00Z",
     data_end_interval="2026-01-02T00:00:00Z",
-    metadata=MetadataSQLite(path="metadata.db"),
+    metadata=SqliteMetadata(path="metadata.db"),
 )
 ```
 
 ## Defining Plugins
 
 ```python
-from typing import ClassVar, Annotated
+from typing import ClassVar
 
-from beacon import BasePlugin
-from beacon import Context
+from beacon import BasePlugin, Context
 
 
 class BigQueryCount(BasePlugin):

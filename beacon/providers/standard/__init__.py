@@ -1,1 +1,1 @@
-from .empty import EmptyPlugin
+from .plugins import EmptyPlugin
