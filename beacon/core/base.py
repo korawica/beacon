@@ -1,8 +1,8 @@
 import threading
 from abc import ABC, abstractmethod
-from typing import ClassVar, Final
+from typing import ClassVar, Final, Self, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from ..const import PLUGINS_REGISTRY
 from .context import Context
@@ -17,9 +17,16 @@ class PluginMeta(type(BaseModel)):
     This metaclass auto-registers every BasePlugin subclass.
     """
 
-    def __new__(cls, name, bases, attrs):
-        new_cls = super().__new__(cls, name, bases, attrs)
-        plugin_name: str = attrs.get("plugin_name")
+    def __new__(
+        cls: type[Self],
+        name: str,
+        bases: tuple[type, ...],
+        attrs: dict[str, Any],
+        **kwargs,
+    ) -> type:
+        """Override the __new__ method."""
+        new_cls = super().__new__(cls, name, bases, attrs, **kwargs)
+        plugin_name: str = attrs.get("plugin_name", BASE_PLUGIN_NAME)
         if (
             plugin_name and plugin_name != BASE_PLUGIN_NAME
             # NOTE: Disallow override the plugins.
@@ -37,10 +44,6 @@ class BasePlugin(BaseModel, ABC, metaclass=PluginMeta):
     """
 
     plugin_name: ClassVar[str] = BASE_PLUGIN_NAME
-
-    id: str = Field(description="A task ID")
-    desc: str = Field(description="A description of the task")
-    uses: str = Field(description="An unsing plugin name")
 
     @abstractmethod
     def execute(self, context: Context):

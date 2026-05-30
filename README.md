@@ -2,7 +2,6 @@
 
 An everyday workflow orchestrator that simple and easy to customize.
 
-
 **Components**:
 
 ```text
@@ -17,24 +16,22 @@ User --> Web Server -> Runner --> Local Executor --> Task Runner --> Result
 This is the full example of a workflow that this beacon package support.
 
 ```python
-from beacon import Runner, Workflow, Group, Param, Sensor
+from beacon import Runner, Dag, Group, Param, Sensor, Task
 from beacon.callbacks import OnStart, OnFailure, OnTaskFailure
 from beacon.providers.msteam import msteam_adaptive_card
 from beacon.providers.smtp import send_mail
 
-from .plugins import Task
 
-
-wf = Workflow(
+dag = Dag(
     id="hello-world",
     desc="An example workflow description",
     params=[
         Param(name="source_system", type="str", default="example"),
     ],
-    callbacks={
+    callbacks=[
         OnStart(hook=msteam_adaptive_card("https://my-webhook-url.com")),
         OnFailure(hook=send_mail("on-call@email.com")),
-    },
+    ],
     tasks=[
         Sensor(
             id="start",
@@ -63,7 +60,7 @@ wf = Workflow(
                 ),
                 Task(
                     id="extract-2",
-                    upstream=["extract-1"],
+                    upstreams=["extract-1"],
                     uses="bigquery_count",
                     inputs={
                         "source_system": "{{ params.source_system }}",
@@ -78,7 +75,7 @@ wf = Workflow(
         ),
         Task(
             id="end",
-            upstream=["extract", "start"],
+            upstreams=["extract", "start"],
             trigger_rule="all_done",
             uses="send_logs",
             inputs={
@@ -101,7 +98,7 @@ wf = Workflow(
     ],
 )
 runner = Runner(
-    workflow=wf,
+    dag=dag,
     data_start_interval="2026-01-01T00:00:00Z",
     data_end_interval="2026-01-02T00:00:00Z",
     metadata=MetadataSQLite(path="metadata.db"),
@@ -111,52 +108,36 @@ runner = Runner(
 ## Defining Plugins
 
 ```python
-from typing import Literal, Annotated
-
-from pydantic import BaseModel, Field
+from typing import ClassVar, Annotated
 
 from beacon import BasePlugin
-from beacon.models.context import Context
-
-
-class BigQueryCountInput(BaseModel):
-    source_system: str
-    bucket: str
-    prefix: str
+from beacon import Context
 
 
 class BigQueryCount(BasePlugin):
     """BigQuery Count Task."""
 
-    uses: Literal["str"] = "bigquery_count"
-    inputs: BigQueryCountInput
+    plugin_name: ClassVar["str"] = "bigquery_count"
 
-    def execute(self, context: Context):
-        print("Start counting bigquery")
-        print(self.inputs)  # type: ignore
-        print(context["params"]["source_system"])  # type: ignore
-
-
-class CloudStorageWithPrefixInput(BaseModel):
     source_system: str
     bucket: str
     prefix: str
+
+    def execute(self, context: Context):
+        print("Start counting bigquery")
+        print(context["params"]["source_system"])  # type: ignore
 
 
 class CloudStorageWithPrefix(BasePlugin):
     """Cloud Storage With Prefix Sensor."""
 
-    uses: Literal["str"] = "cloud_storage_with_prefix"
-    inputs: CloudStorageWithPrefixInput
+    plugin_name: ClassVar["str"] = "cloud_storage_with_prefix"
+
+    source_system: str
+    bucket: str
+    prefix: str
 
     def execute(self, context: Context):
         print("Start checking cloud storage with prefix")
-        print(self.inputs)  # type: ignore
         print(context["params"]["source_system"])  # type: ignore
-
-
-Task = Annotated[
-    BigQueryCount | CloudStorageWithPrefix,
-    Field(discriminator="uses"),
-]
 ```
