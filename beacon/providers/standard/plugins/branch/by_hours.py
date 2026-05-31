@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import ClassVar, TYPE_CHECKING
 
 from pydantic import Field
@@ -17,4 +18,8 @@ class ByHourBranchPlugin(BasePlugin):
     )
 
     def execute(self, context: Context) -> bool:
-        return True
+        """Execute the plugin."""
+        logical_date: datetime = context["logical_date"]
+        if logical_date.hour in self.hours:
+            return True
+        return False

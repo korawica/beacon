@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from .group import Action
@@ -7,6 +9,7 @@ class Dag(BaseModel):
     """DAG Model."""
 
     id: str = Field(description="A DAG ID")
+    type: Literal["dag"] = Field(default="dag", description="The DAG type")
     desc: str = Field(default=None, description="A description of the DAG")
     params: list = Field(
         default_factory=list, description="A list of parameters"

@@ -1,11 +1,12 @@
 import threading
 import logging
 from abc import ABC, abstractmethod
-from typing import ClassVar, Final, Self, Any
+from typing import ClassVar, Final, Self, Any, cast
 
 from pydantic import BaseModel
 
 from .context import Context
+from .templater import Templater
 
 __all__ = (
     "BASE_PLUGIN_NAME",
@@ -55,7 +56,8 @@ def register_plugin(cls: type, name: str | None = None) -> None:
 class PluginMeta(type(BaseModel)):
     """Plugin Metaclass.
 
-    This metaclass auto-registers every BasePlugin subclass.
+    This metaclass auto-registers every BasePlugin subclass to the ``PLUGINS_REGISTRY``
+    for using from any Action model by ``uses`` field.
     """
 
     def __new__(
@@ -64,14 +66,16 @@ class PluginMeta(type(BaseModel)):
         bases: tuple[type, ...],
         attrs: dict[str, Any],
         **kwargs,
-    ) -> type:
-        """Override the __new__ method."""
-        new_cls = super().__new__(cls, name, bases, attrs, **kwargs)
+    ) -> type[Self]:
+        """Override the ``__new__`` method."""
+        new_cls = cast(
+            type[Self], super().__new__(cls, name, bases, attrs, **kwargs)
+        )
         register_plugin(new_cls, attrs.get("plugin_name", BASE_PLUGIN_NAME))
         return new_cls
 
 
-class BasePlugin(BaseModel, ABC, metaclass=PluginMeta):
+class BasePlugin(Templater, ABC, metaclass=PluginMeta):
     """Base Plugin Model.
 
     This class auto-registers every BasePlugin subclass.
@@ -85,7 +89,7 @@ class BasePlugin(BaseModel, ABC, metaclass=PluginMeta):
 
         Args:
             context (Context):
-                A DAG run context that was generated.
+                A DAG runned context that was generated after queue DAG.
         """
         raise NotImplementedError(
             "The execute method of BasePlugin is not implemented."

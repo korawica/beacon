@@ -1,19 +1,19 @@
 from typing import ClassVar, TYPE_CHECKING
 
+from pydantic import Field
+
 from .....core import BasePlugin
 
 if TYPE_CHECKING:
     from .....core import Context
 
 
-class EmptyPlugin(BasePlugin):
-    """Empty Plugin.
-
-    This plugin do not action anything. It will use for reserve tasks or test
-    the DAG workflow and its dependencies.
-    """
+class PythonPlugin(BasePlugin):
+    """Python Plugin."""
 
     plugin_name: ClassVar[str] = "empty"
+
+    py_file: str = Field(description="Python file")
 
     def execute(self, context: Context) -> None:
         pass
