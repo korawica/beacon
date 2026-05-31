@@ -9,7 +9,7 @@ An everyday workflow orchestrator that simple and easy to customize.
 This is the full example of a workflow that this beacon package support.
 
 ```python
-from beacon import Runner, Dag, Group, Param, Sensor, Task
+from beacon import Dag, Group, Param, Sensor, Task
 from beacon.callbacks import OnStart, OnFailure, OnTaskFailure
 from beacon.metadata import SqliteMetadata
 from beacon.providers.msteam import msteam_adaptive_card
@@ -91,8 +91,7 @@ dag = Dag(
         ),
     ],
 )
-runner = Runner(
-    dag=dag,
+runner = dag.run(
     data_start_interval="2026-01-01T00:00:00Z",
     data_end_interval="2026-01-02T00:00:00Z",
     metadata=SqliteMetadata(path="metadata.db"),

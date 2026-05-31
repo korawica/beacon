@@ -26,3 +26,10 @@ class Dag(BaseModel):
             "model"
         ),
     )
+
+    def run(self): ...
+
+    def test(self): ...
+
+    def dryrun(self):
+        """Dry run on the DAG for showing final passing Jinja template rendering."""

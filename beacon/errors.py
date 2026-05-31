@@ -1,10 +1,10 @@
-class ActionException(Exception):
+class TaskException(Exception):
     pass
 
 
-class ActionFailed(ActionException):
+class TaskFailed(TaskException):
     pass
 
 
-class ActionSkipped(ActionException):
+class TaskSkipped(TaskException):
     pass

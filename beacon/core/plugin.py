@@ -1,4 +1,5 @@
 import threading
+import logging
 from abc import ABC, abstractmethod
 from typing import ClassVar, Final, Self, Any
 
@@ -6,9 +7,49 @@ from pydantic import BaseModel
 
 from .context import Context
 
+__all__ = (
+    "BASE_PLUGIN_NAME",
+    "PLUGINS_REGISTRY",
+    "BasePlugin",
+    "register_plugin",
+)
+
+logger = logging.getLogger("beacon.core")
+
+
 BASE_PLUGIN_NAME: Final[str] = "base"
 PLUGINS_REGISTRY: dict[str, type] = {}
 _lock = threading.Lock()
+
+
+def register_plugin(cls: type, name: str | None = None) -> None:
+    """Register a plugin class.
+
+    Args:
+        cls (type):
+            A subclass of Plugin model
+        name (str | None, optional):
+            A Plugin name that want to use instead of its class attribute name,
+            ``plugin_name``.
+
+    !!! example
+
+        ```python
+        from beacon.core import BasePlugin, register_plugin
+
+        register_plugin(BasePlugin)
+        ```
+    """
+    plugin_name: str = name or getattr(cls, "plugin_name", BASE_PLUGIN_NAME)
+    if (
+        plugin_name and plugin_name != BASE_PLUGIN_NAME
+        # NOTE: Disallow override the plugins.
+        # and plugin_name not in PLUGINS_REGISTRY
+    ):
+        if plugin_name in PLUGINS_REGISTRY:
+            logger.debug("Overriding plugin registry with %s", plugin_name)
+        with _lock:
+            PLUGINS_REGISTRY[plugin_name] = cls
 
 
 class PluginMeta(type(BaseModel)):
@@ -26,14 +67,7 @@ class PluginMeta(type(BaseModel)):
     ) -> type:
         """Override the __new__ method."""
         new_cls = super().__new__(cls, name, bases, attrs, **kwargs)
-        plugin_name: str = attrs.get("plugin_name", BASE_PLUGIN_NAME)
-        if (
-            plugin_name and plugin_name != BASE_PLUGIN_NAME
-            # NOTE: Disallow override the plugins.
-            # and plugin_name not in PLUGINS_REGISTRY
-        ):
-            with _lock:
-                PLUGINS_REGISTRY[plugin_name] = new_cls
+        register_plugin(new_cls, attrs.get("plugin_name", BASE_PLUGIN_NAME))
         return new_cls
 
 
@@ -47,6 +81,12 @@ class BasePlugin(BaseModel, ABC, metaclass=PluginMeta):
 
     @abstractmethod
     def execute(self, context: Context):
+        """Plugin execution method.
+
+        Args:
+            context (Context):
+                A DAG run context that was generated.
+        """
         raise NotImplementedError(
             "The execute method of BasePlugin is not implemented."
         )

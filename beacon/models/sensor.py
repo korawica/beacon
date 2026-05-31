@@ -27,15 +27,15 @@ class Sensor(BaseAction):
     )
     mode: Literal["poke", "reschedule"] = Field(
         default="poke",
-        description="The mode of the sensor.",
+        description="A mode of the sensor.",
     )
     check_interval: int = Field(
         default=60,
-        description="The interval in seconds that the sensor will poke.",
+        description="An interval in seconds that the sensor will poke.",
     )
     execution_timeout: int | None = Field(
         default=None,
-        description="The timeout in seconds for the sensor execution.",
+        description="A timeout in seconds for the sensor checking.",
     )
     exponential_backoff: bool = Field(
         default=True,
@@ -43,5 +43,5 @@ class Sensor(BaseAction):
     )
     fail_mode: Literal["soft", "silent"] = Field(
         default="soft",
-        description="A mode of fail event.",
+        description="A mode of fail event if it handle from a plugin.",
     )
