@@ -1,6 +1,7 @@
 # Beacon
 
-An everyday workflow orchestrator that simple and easy to customize.
+An everyday workflow orchestrator that simple and easy to customize via YAML
+template.
 
 ---
 
@@ -8,9 +9,10 @@ An everyday workflow orchestrator that simple and easy to customize.
 
 This is the full example of a workflow that this beacon package support.
 
-```yaml
+```yaml title="hello_world.yml"
 id: hello-world
 type: dag
+owners: ["de"]
 desc: An example workflow description
 tasks:
   - id: start

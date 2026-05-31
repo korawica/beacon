@@ -11,6 +11,14 @@ class Dag(BaseModel):
     id: str = Field(description="A DAG ID")
     type: Literal["dag"] = Field(default="dag", description="The DAG type")
     desc: str = Field(default=None, description="A description of the DAG")
+    project: str = Field(default="default", description="A project name")
+    owners: list[str] = Field(
+        description="A list of owners",
+    )
+    labels: dict[str, str] = Field(
+        default_factory=dict,
+        description="A mapping of labels",
+    )
     params: list = Field(
         default_factory=list, description="A list of parameters"
     )
