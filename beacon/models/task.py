@@ -22,7 +22,9 @@ class Task(BaseAction):
         ```
     """
 
-    type: Literal["task"] = Field(default="task")
+    type: Literal["task"] = Field(
+        default="task", description="A task action type"
+    )
     retries: int = Field(default=0, description="Number of retries")
     retry_delay: int = Field(default=10, description="Delay between retries")
     execution_timeout: int | None = Field(

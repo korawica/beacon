@@ -4,10 +4,17 @@
 Client --> GCS/Git Remote --> Sync to Server --> Server --> UI
 ```
 
+**Components**:
+
+- Client (e.g. CLI, SDK)
+- Web Server (Frontend)
+- Backend Server (API Server with Async Worker)
+- Metadata Store (e.g. Sqlite, Postgres)
+
 ## Development Journey
 
 ```text
-User --> 1.) Client DAG
+User --> 1.) Client DAG with YAML/Python
          2.) Develop DAG
          3.) Test & Validate DAG
          4.) Sync to Development
@@ -17,5 +24,5 @@ User --> 1.) Client DAG
          7.) Review & Sync to Production
          8.) UI
          9.) Sync Schedule
-        10.) Monitor
+         10.) Monitor
 ```

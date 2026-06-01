@@ -5,19 +5,19 @@
 The project file structure should be organized as follows:
 
 ```text
-plugins/
-  gcs/
-    sensor.py               <-- Global plugin directory.
-workflows/
-  domain/
-    propose/
-      {workflow-id}/
-        assets/             <-- Local plugin directory, only for this workflow.
-          plugin.py
-        workflow.yml
-        variables.yml
-    global_variables.yml    <-- Global variables, accessible by all workflows.
-  global_variables.yml      <-- Global variables, accessible by all workflows.
+|- plugins/
+|    gcs/
+|      sensor.py               <-- Global plugin directory.
+|- workflows/
+     domain/
+       propose/
+         {workflow-id}/
+           assets/             <-- Local plugin directory, only for this workflow.
+             plugin.py
+           workflow.yml
+           variables.yml
+       global_variables.yml    <-- Global variables, accessible by all workflows.
+     global_variables.yml      <-- Global variables, accessible by all workflows.
 ```
 
 ## File Lists
