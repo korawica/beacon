@@ -28,3 +28,7 @@ class Task(BaseAction):
     execution_timeout: int | None = Field(
         default=None, description="Timeout in seconds"
     )
+    exponential_backoff: bool = Field(
+        default=True,
+        description="Whether or not to exponentially backoff.",
+    )

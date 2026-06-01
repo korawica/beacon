@@ -3,6 +3,12 @@
 An everyday workflow orchestrator that simple and easy to customize via YAML
 template.
 
+Propose of Beacon:
+
+- Simple
+- Scalable
+- Customizable
+
 ---
 
 ## Examples
