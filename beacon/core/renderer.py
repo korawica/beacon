@@ -17,7 +17,7 @@ from jinja2.exceptions import TemplateAssertionError
 from jinja2.nativetypes import NativeEnvironment
 from jinja2.sandbox import SandboxedEnvironment
 
-from .utils import is_jinja
+from beacon.utils import is_jinja
 
 logger = logging.getLogger("beacon.jinja2")
 

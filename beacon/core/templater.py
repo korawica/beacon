@@ -1,6 +1,14 @@
-from typing import ClassVar
+import logging
+from typing import Any, ClassVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationInfo
+from pydantic.functional_validators import model_validator
+from pydantic_core import PydanticUndefined
+
+from .renderer import JinjaRender
+
+
+logger = logging.getLogger("beacon.core")
 
 
 class Templater(BaseModel):
@@ -45,3 +53,57 @@ class Templater(BaseModel):
 
     template_fields: ClassVar[tuple[str, ...]] = ()
     template_fields_ext: ClassVar[dict[str, tuple[str, ...]]] = {}
+
+    @model_validator(mode="before")
+    @classmethod
+    def render_template_fields(
+        cls,
+        data: Any,
+        info: ValidationInfo,
+    ) -> Any:  # NOSONAR
+        """Pre Template Fields validator to add any extra template fields from
+        `template_fields_ext` class variable.
+
+        Args:
+            data (dict): A model data that will validate.
+            info (ValidationInfo): A validation info object that contains
+                context data.
+
+        Returns:
+            dict | Any: A model data after render the template fields.
+        """
+        if (
+            cls.template_fields
+            and isinstance(data, dict)
+            and info.context
+            and "jinja_renderer" in info.context
+        ):
+            renderer: JinjaRender = info.context["jinja_renderer"]
+            for field_name in cls.template_fields:
+                field_value: Any = data.get(field_name)
+                from_default: bool = False
+
+                # ℹ️ NOTE: Pre-set default glob variable if the field value is
+                #   None. This is to avoid rendering issues with glob variables.
+                if (
+                    field_value is None
+                    and (field := cls.model_fields.get(field_name)) is not None
+                    and (default := field.default) is not PydanticUndefined
+                    and isinstance(default, str)
+                ):
+                    logger.debug(
+                        "🔍 Pre-Setting default glob variable for %r",
+                        field_name,
+                    )
+                    field_value: str = default
+                    from_default: bool = True
+
+                # ℹ️ NOTE: Only render if ``field_value`` is not None or empty
+                if field_value:
+                    data[field_name] = cls.render_field(
+                        field_name,
+                        field_value,
+                        renderer,
+                        from_default=from_default,
+                    )
+        return data
