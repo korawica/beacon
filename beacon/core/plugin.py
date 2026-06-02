@@ -67,24 +67,31 @@ class PluginMeta(type(BaseModel)):
         attrs: dict[str, Any],
         **kwargs,
     ) -> type[Self]:
-        """Override the ``__new__`` method."""
+        """Register its subclass to the ``PLUGINS_REGISTRY`` with the
+        ``plugin_name`` class variable.
+        """
         new_cls = cast(
             type[Self], super().__new__(cls, name, bases, attrs, **kwargs)
         )
-        register_plugin(new_cls, attrs.get("plugin_name", BASE_PLUGIN_NAME))
+        register_plugin(
+            new_cls,
+            attrs.get("plugin_name", new_cls.__name__),
+        )
         return new_cls
 
 
 class BasePlugin(Templater, ABC, metaclass=PluginMeta):
     """Base Plugin Model.
 
-    This class auto-registers every BasePlugin subclass.
+    This class auto-registers every BasePlugin subclass with the ``plugin_name``
+    class variable to the ``PLUGINS_REGISTRY`` for using from any Action model by
+    ``uses`` field.
     """
 
     plugin_name: ClassVar[str] = BASE_PLUGIN_NAME
 
     @abstractmethod
-    def execute(self, context: Context):
+    async def execute(self, context: Context):
         """Plugin execution method.
 
         Args:

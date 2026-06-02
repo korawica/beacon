@@ -1,3 +1,4 @@
+import re
 import importlib
 import pkgutil
 from types import ModuleType
@@ -67,3 +68,18 @@ def is_jinja(s: str, pure: bool = True) -> bool:
     # ℹ️ NOTE: ``pure=True`` -→ all characters must be inside JINJA tags
     combined = "".join(m.group(0) for m in matches)
     return combined == s
+
+
+def to_snake_case(value: str) -> str:
+    """Convert string value to snake case.
+
+    Examples:
+        >>> to_snake_case('camel2_camel2_case')
+        'camel2_camel2_case'
+        >>> to_snake_case('getHTTPResponseCode')
+        'get_http_response_code'
+        >>> to_snake_case('HTTPResponseCodeXYZ')
+        'http_response_code_xyz'
+    """
+    value = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", value)
+    return re.sub("([a-z0-9])([A-Z])", r"\1_\2", value).lower()

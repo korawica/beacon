@@ -17,7 +17,7 @@ class ByHourBranchPlugin(BasePlugin):
         description="A list of hour (0-23) to determine the downstream path.",
     )
 
-    def execute(self, context: Context) -> bool:
+    async def execute(self, context: Context) -> bool:
         """Execute the plugin."""
         logical_date: datetime = context["logical_date"]
         if logical_date.hour in self.hours:

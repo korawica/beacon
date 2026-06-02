@@ -9,11 +9,28 @@ if TYPE_CHECKING:
 
 
 class PythonPlugin(BasePlugin):
-    """Python Plugin."""
+    """Python Plugin.
 
-    plugin_name: ClassVar[str] = "empty"
+    !!! example
+
+        ```yaml
+        tasks:
+          - id: example
+            type: task
+            uses: py
+            py_file: ./example.py
+            env:
+              ENV_VAR: foo
+        ```
+    """
+
+    plugin_name: ClassVar[str] = "py"
 
     py_file: str = Field(description="Python file")
+    env: dict[str, str] = Field(
+        default_factory=dict,
+        description="A mapping of environment variables",
+    )
 
-    def execute(self, context: Context) -> None:
+    async def execute(self, context: Context) -> None:
         pass

@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field, field_validator
 
-from .plugin import PLUGINS_REGISTRY
+from .plugin import PLUGINS_REGISTRY, BasePlugin
 from .context import Context
 from .trigger_rule import TriggerRule
 
@@ -15,7 +15,9 @@ class BaseAction(BaseModel):
     id: str = Field(description="A task ID")
     type: str = Field(description="The type of action")
     desc: str = Field(default=None, description="A description of the task")
-    uses: str = Field(description="An unsing plugin name")
+    uses: str | type[BasePlugin] = Field(
+        description="An unsing plugin name in registry or a plugin model class",
+    )
     upstream: list[str] = Field(
         default_factory=list,
         description="A list of upstream task ID(s)",
@@ -43,6 +45,8 @@ class BaseAction(BaseModel):
 
     def plugin(self) -> type[BaseModel]:
         """Get the plugin model."""
-        return PLUGINS_REGISTRY[self.uses]
+        if isinstance(self.uses, str):
+            return PLUGINS_REGISTRY[self.uses]
+        return self.uses
 
     def warp_execute(self, context: Context): ...

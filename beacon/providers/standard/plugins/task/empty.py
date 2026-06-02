@@ -15,5 +15,5 @@ class EmptyPlugin(BasePlugin):
 
     plugin_name: ClassVar[str] = "empty"
 
-    def execute(self, context: Context) -> None:
+    async def execute(self, context: Context) -> None:
         pass

@@ -1,28 +1,31 @@
 # Architecture
 
+## Components
+
 ```text
-Client --> GCS/Git Remote --> Sync to Server --> Server --> UI
+Client --> UI (Web Server) <---> API Server  <---> Async Worker
+                                  |                  |
+                                  |                  |
+                                  v                  v
+                                 [      Database      ]
 ```
 
 **Components**:
 
 - Client (e.g. CLI, SDK)
 - Web Server (Frontend)
-- Backend Server (API Server with Async Worker)
-- Metadata Store (e.g. Sqlite, Postgres)
+- API Server (API Server)
+- Async Worker (e.g. Local, Celery, Kubernetes)
+- Metadata Database (e.g. Sqlite, Postgres)
 
-## Development Journey
+## Model Flow
 
 ```text
-User --> 1.) Client DAG with YAML/Python
-         2.) Develop DAG
-         3.) Test & Validate DAG
-         4.) Sync to Development
-         5.) UI
-         6.) Manual Trigger
-         6.1) Back to 1.) if it not ready
-         7.) Review & Sync to Production
-         8.) UI
-         9.) Sync Schedule
-         10.) Monitor
+Plugin --> Task --> Group? --> Dag --> Schedule
 ```
+
+- **Plugin**: A reusable model that already implemented the logic of action
+- **Task**: A unit of work that uses a plugin and defines the inputs
+- **Group**: A collection of tasks that can be treated as a single unit (optional)
+- **Dag**: A directed acyclic graph that defines the workflow, including tasks and their dependencies
+- **Schedule**: A schedule that defines when the workflow should run and Dag parameters

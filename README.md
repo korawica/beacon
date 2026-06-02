@@ -1,19 +1,14 @@
 # Beacon
 
-An everyday workflow orchestrator that simple and easy to customize via YAML
+An everyday async workflow orchestrator that simple and easy to customize via YAML
 template.
 
-Propose of Beacon:
-
-- Simple
-- Scalable
-- Customizable
+- Simple with less component, Webserver, API server, Database, and Worker
+- Scalable with concept write once and run reuse it.
 
 ---
 
 ## Examples
-
-This is the full example of a workflow that this beacon package support.
 
 ```yaml title="hello_world.yml"
 id: hello-world
@@ -34,9 +29,14 @@ tasks:
 from beacon import Schedule
 
 schedule = Schedule(
-    cron="0 0 * * *",
+    id="hello-world-schedule",
+    cron="10 0 * * *",
     timezone="UTC",
+    catchup="{{ vars('catchup', 'false') }}",
     dag="hello_world.yml",
+    variables="variables.yml",
 )
 schedule.run()
 ```
+
+claude --resume 6f86578e-740d-4705-9e96-222a2f6a45ab

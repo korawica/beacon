@@ -2,6 +2,7 @@
 
 ```python
 from beacon import Dag, Group, Param, Sensor, Task
+from beacon.providers.standard.plugins import EmptyPlugin
 from beacon.calllback import OnEvent, OnTaskEvent
 from beacon.metadata import SqliteMetadata
 from beacon.providers.msteam import msteam_adaptive_card
@@ -18,9 +19,16 @@ dag = Dag(
             on_event="success",
             hook=msteam_adaptive_card("https://my-webhook-url.com"),
         ),
-        OnEvent(on_event="failure", hook=send_mail("on-call@email.com")),
+        OnEvent(
+            on_event="failure",
+            hook=send_mail("on-call@email.com"),
+        ),
     ],
     tasks=[
+        Task(
+            id="start",
+            uses=EmptyPlugin,
+        ),
         Sensor(
             id="start",
             uses="plugins/cloud_storage_with_prefix",
