@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from .context import Context
 from .templater import Templater
+from ..utils import to_snake_case
 
 __all__ = (
     "BASE_PLUGIN_NAME",
@@ -49,6 +50,8 @@ def register_plugin(cls: type, name: str | None = None) -> None:
     ):
         if plugin_name in PLUGINS_REGISTRY:
             logger.debug("Overriding plugin registry with %s", plugin_name)
+
+        # NOTE: Start update plugin to the registry.
         with _lock:
             PLUGINS_REGISTRY[plugin_name] = cls
 
@@ -75,7 +78,7 @@ class PluginMeta(type(BaseModel)):
         )
         register_plugin(
             new_cls,
-            attrs.get("plugin_name", new_cls.__name__),
+            attrs.get("plugin_name", to_snake_case(new_cls.__name__)),
         )
         return new_cls
 

@@ -1,4 +1,8 @@
-# Example: Python API
+# Example: Python with Plugin
+
+## Define Dag
+
+First, you must define your Dag object.
 
 ```python
 from beacon import Dag, Group, Param, Sensor, Task
@@ -10,6 +14,7 @@ from beacon.providers.smtp import send_mail
 
 dag = Dag(
     id="hello-world",
+    owners=["de"],
     desc="An example workflow description",
     params=[
         Param(name="source_system", type="str", default="example"),
@@ -95,14 +100,12 @@ dag = Dag(
         ),
     ],
 )
-runner = dag.run(
-    data_start_interval="2026-01-01T00:00:00Z",
-    data_end_interval="2026-01-02T00:00:00Z",
-    metadata=SqliteMetadata(path="metadata.db"),
-)
 ```
 
 ## Defining Plugins
+
+The plugins must be keep and install to your package and install it before
+deploy beacon.
 
 ```python
 from typing import ClassVar

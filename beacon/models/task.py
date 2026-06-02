@@ -1,8 +1,12 @@
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, BaseModel
 
 from ..core import BaseAction
+
+
+class TaskOutput(BaseModel):
+    metadata: dict = Field(..., description="A task output metadata")
 
 
 class Task(BaseAction):
@@ -25,12 +29,24 @@ class Task(BaseAction):
     type: Literal["task"] = Field(
         default="task", description="A task action type"
     )
-    retries: int = Field(default=0, description="Number of retries")
-    retry_delay: int = Field(default=10, description="Delay between retries")
+    retries: int = Field(default=0, description="A number of retries")
+    retry_delay: int = Field(
+        default=10, description="A delay second between retries"
+    )
     execution_timeout: int | None = Field(
-        default=None, description="Timeout in seconds"
+        default=None, description="An execution timeout in seconds"
     )
     exponential_backoff: bool = Field(
         default=True,
         description="Whether or not to exponentially backoff.",
     )
+
+    def outputs(self) -> dict:
+        """Return Task model outputs."""
+        return {
+            "metadata": {
+                "inputs": self.inputs,
+            },
+            "outputs": {},
+            "retries": self.retries,
+        }

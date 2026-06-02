@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 from .plugin import PLUGINS_REGISTRY, BasePlugin
 from .context import Context
@@ -35,17 +35,13 @@ class BaseAction(BaseModel):
         description="A dict of inputs that will passing to its plugin model",
     )
 
-    @field_validator("uses", mode="after")
-    @classmethod
-    def check_plugin_installed(cls, data: str) -> str:
-        """Check if the plugin is installed."""
-        if isinstance(data, str) and data not in PLUGINS_REGISTRY:
-            raise ValueError(f"The plugin {data} is not installed")
-        return data
-
     def plugin(self) -> type[BaseModel]:
         """Get the plugin model."""
         if isinstance(self.uses, str):
+            if self.uses not in PLUGINS_REGISTRY:
+                raise NotImplementedError(
+                    f"A plugin {self.uses!r} not implemented on the registry.",
+                )
             return PLUGINS_REGISTRY[self.uses]
         return self.uses
 

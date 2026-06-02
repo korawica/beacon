@@ -1,5 +1,6 @@
 import logging
-from typing import Any, ClassVar
+import re
+from typing import Any, ClassVar, Final
 
 from pydantic import BaseModel, ValidationInfo
 from pydantic.functional_validators import model_validator
@@ -9,6 +10,21 @@ from .renderer import JinjaRender
 
 
 logger = logging.getLogger("beacon.core")
+
+GLOB_VAR_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"""
+    \{\{
+      [^}]*                 # Match any characters except }
+      vars
+      \(
+        ['\"]
+        (?P<glob>glob_\w+)  # Capture glob variable name
+        ['\"]
+      [^}]*
+    }}
+    """,
+    re.VERBOSE,
+)
 
 
 class Templater(BaseModel):
@@ -54,6 +70,50 @@ class Templater(BaseModel):
     template_fields: ClassVar[tuple[str, ...]] = ()
     template_fields_ext: ClassVar[dict[str, tuple[str, ...]]] = {}
 
+    @classmethod
+    def render_field(
+        cls,
+        name: str,
+        data: Any,
+        renderer: JinjaRender,
+        *,
+        from_default: bool = False,
+    ) -> Any:
+        """Render a template field using the provided Jinja renderer.
+
+        Args:
+            name (str): The name of the template field.
+            data (Any): The data to be rendered.
+            renderer (JinjaRender): The Jinja renderer instance.
+            from_default (bool): Whether the data is from the default value.
+
+        Returns:
+            Any: The rendered data.
+        """
+        data: Any = renderer.render(
+            data,
+            template_ext=cls.template_fields_ext.get(name),
+        )
+
+        if (
+            isinstance(data, str)
+            and (match := GLOB_VAR_PATTERN.search(data))
+            and from_default
+        ):
+            value: str = match.group("glob")
+            logger.warning(
+                "⚠️ The Global variables %r are not settled yet.",
+                value,
+            )
+            raise ValueError(
+                f"The Global variables {value!r} are "
+                f"not settled yet. "
+                "Please make sure all global variables are set "
+                "before rendering the template fields."
+            )
+
+        return data
+
     @model_validator(mode="before")
     @classmethod
     def render_template_fields(
@@ -90,6 +150,7 @@ class Templater(BaseModel):
                     and (field := cls.model_fields.get(field_name)) is not None
                     and (default := field.default) is not PydanticUndefined
                     and isinstance(default, str)
+                    and GLOB_VAR_PATTERN.search(default)
                 ):
                     logger.debug(
                         "🔍 Pre-Setting default glob variable for %r",

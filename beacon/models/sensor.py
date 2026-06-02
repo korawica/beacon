@@ -45,3 +45,12 @@ class Sensor(BaseAction):
         default="soft",
         description="A mode of fail event if it handle from a plugin.",
     )
+
+    def outputs(self) -> dict:
+        return {
+            "metadata": {
+                "inputs": self.inputs,
+            },
+            "outputs": {},
+            # "found": ,
+        }
