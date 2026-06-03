@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import ClassVar, TYPE_CHECKING
+from typing import Any, ClassVar, TYPE_CHECKING
 
 from pydantic import Field
 
@@ -10,16 +10,36 @@ if TYPE_CHECKING:
 
 
 class ByHourBranchPlugin(BasePlugin):
+    """Branch plugin that routes based on the logical_date hour.
+
+    Returns {"branch": success_path} if the hour matches, otherwise
+    {"branch": failure_path}. The success/failure paths are defined
+    on the Branch action, not here — this plugin just signals which
+    direction to go via the standard {"branch": [...]} contract.
+
+    Usage:
+        ```yaml
+        tasks:
+          - id: hour-gate
+            type: branch
+            uses: by_hours
+            inputs:
+              hours: [2, 3, 4]
+            success: [full-load]
+            failure: [incremental-load]
+        ```
+    """
+
     plugin_name: ClassVar[str] = "by_hours"
 
     hours: list[int] = Field(
         default_factory=list,
-        description="A list of hour (0-23) to determine the downstream path.",
+        description="Hours (0-23) that should take the success path.",
     )
 
-    async def execute(self, context: Context) -> bool:
-        """Execute the plugin."""
+    async def execute(self, context: Context) -> dict[str, Any]:
+        """Return branch decision based on logical_date hour."""
         logical_date: datetime = context["logical_date"]
         if logical_date.hour in self.hours:
-            return True
-        return False
+            return {"matched": True}
+        return {}

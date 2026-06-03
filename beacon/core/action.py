@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field as dc_field
 from typing import Any, Type  # noqa
 
 from pydantic import BaseModel, Field
@@ -12,6 +13,17 @@ from .task_context import AttemptStatus, TaskContext
 from .trigger_rule import TriggerRule
 
 logger = logging.getLogger("beacon.action")
+
+
+@dataclass
+class DownstreamDirective:
+    """What to do with downstream tasks after this action completes."""
+
+    schedule: list[str] = dc_field(default_factory=list)
+    """Task IDs to move to SCHEDULED → QUEUED."""
+
+    skip: list[str] = dc_field(default_factory=list)
+    """Task IDs to mark SKIPPED (and transitively skip their downstream)."""
 
 
 class BaseAction(BaseModel):
@@ -53,6 +65,20 @@ class BaseAction(BaseModel):
                 )
             return PLUGINS_REGISTRY[self.uses]
         return self.uses
+
+    def evaluate_downstream(
+        self,
+        task_ctx: TaskContext,
+        all_downstream: list[str],
+    ) -> DownstreamDirective:
+        """Determine which downstream tasks to schedule vs skip.
+
+        Override in subclasses (Branch, ShortCircuit) to provide custom
+        routing logic based on plugin outputs.
+
+        Default: schedule all downstream on success.
+        """
+        return DownstreamDirective(schedule=all_downstream, skip=[])
 
     def build_task_context(
         self,
