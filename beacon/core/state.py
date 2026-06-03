@@ -3,12 +3,8 @@
 This module defines all possible states a task instance can be in during
 its lifecycle, from initial scheduling through terminal completion.
 
-The design references Apache Airflow's task state model but removes the
-abstract mixin layers and consolidates into a single flat enum with
-helper sets for state classification.
-
-References:
-    https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/tasks.html#task-instance-states
+It also defines the valid state transitions as a directed graph, so that
+any state change can be validated before persisting to the metadata store.
 """
 
 from enum import StrEnum
@@ -17,27 +13,25 @@ from enum import StrEnum
 class TaskState(StrEnum):
     """All possible states a task instance can occupy.
 
-    Lifecycle states (non-terminal):
-        A task moves through these states during normal execution.
-
-    Terminal states:
-        A task reaches one of these and will not transition further
-        without external intervention (retry, clear, etc.).
+    Lifecycle:
+        NONE → SCHEDULED → QUEUED → RUNNING → SUCCESS
+                                            → FAILED
+                                            → UP_FOR_RETRY → QUEUED (retry loop)
+        NONE → SKIPPED (trigger rule not met)
+        NONE → UPSTREAM_FAILED (upstream failed, no skip)
+        RUNNING → REMOVED (DAG edited mid-run)
 
     Attributes:
-        NONE: The task is registered but not yet scheduled.
-        SCHEDULED: The task is scheduled and waiting for a worker slot.
-        QUEUED: The task has been sent to a worker and is waiting to run.
-        RUNNING: The task is actively executing.
-        SUCCESS: The task completed successfully (terminal).
-        FAILED: The task raised an unhandled exception (terminal).
-        SKIPPED: The task was intentionally skipped (terminal).
-        UPSTREAM_FAILED: The task was not run because an upstream
-            dependency failed (terminal).
-        UP_FOR_RETRY: The task failed but has retries remaining and will
-            be rescheduled.
-        REMOVED: The task was removed from the DAG while a run was
-            active (terminal).
+        NONE: The task is registered but not yet evaluated by the scheduler.
+        SCHEDULED: The scheduler determined this task should run (deps met).
+        QUEUED: The task has been sent to an executor queue, waiting for a slot.
+        RUNNING: The executor is actively running the plugin.
+        SUCCESS: The plugin completed without error (terminal).
+        FAILED: All retries exhausted, plugin raised an error (terminal).
+        SKIPPED: Trigger rule evaluated to skip (terminal).
+        UPSTREAM_FAILED: An upstream dependency is in a failed state (terminal).
+        UP_FOR_RETRY: The attempt failed but retries remain. Will re-queue.
+        REMOVED: The task was removed from DAG while run was active (terminal).
     """
 
     # -- Non-terminal (lifecycle) states --
@@ -54,6 +48,51 @@ class TaskState(StrEnum):
     UPSTREAM_FAILED = "upstream_failed"
     REMOVED = "removed"
 
+
+#: Valid state transitions. Key = current state, value = set of allowed next states.
+VALID_TRANSITIONS: dict[TaskState, frozenset[TaskState]] = {
+    TaskState.NONE: frozenset(
+        {
+            TaskState.SCHEDULED,
+            TaskState.SKIPPED,
+            TaskState.UPSTREAM_FAILED,
+            TaskState.REMOVED,
+        }
+    ),
+    TaskState.SCHEDULED: frozenset(
+        {
+            TaskState.QUEUED,
+            TaskState.REMOVED,
+        }
+    ),
+    TaskState.QUEUED: frozenset(
+        {
+            TaskState.RUNNING,
+            TaskState.REMOVED,
+        }
+    ),
+    TaskState.RUNNING: frozenset(
+        {
+            TaskState.SUCCESS,
+            TaskState.FAILED,
+            TaskState.UP_FOR_RETRY,
+            TaskState.REMOVED,
+        }
+    ),
+    TaskState.UP_FOR_RETRY: frozenset(
+        {
+            TaskState.QUEUED,
+            TaskState.FAILED,  # manual mark-failed or system limit
+            TaskState.REMOVED,
+        }
+    ),
+    # Terminal states have no outgoing transitions (except manual clear)
+    TaskState.SUCCESS: frozenset(),
+    TaskState.FAILED: frozenset(),
+    TaskState.SKIPPED: frozenset(),
+    TaskState.UPSTREAM_FAILED: frozenset(),
+    TaskState.REMOVED: frozenset(),
+}
 
 #: States that represent a finished task (no further transitions).
 TERMINAL_STATES: frozenset[TaskState] = frozenset(
@@ -76,3 +115,25 @@ UNFINISHED_STATES: frozenset[TaskState] = frozenset(
         TaskState.UP_FOR_RETRY,
     }
 )
+
+
+def validate_transition(current: TaskState, target: TaskState) -> bool:
+    """Check whether a state transition is valid.
+
+    Args:
+        current: The current task state.
+        target: The desired next state.
+
+    Returns:
+        True if the transition is allowed.
+
+    Raises:
+        ValueError: If the transition is not allowed.
+    """
+    allowed = VALID_TRANSITIONS.get(current, frozenset())
+    if target not in allowed:
+        raise ValueError(
+            f"Invalid state transition: {current!r} → {target!r}. "
+            f"Allowed from {current!r}: {sorted(allowed)}"
+        )
+    return True

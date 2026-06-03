@@ -1,11 +1,17 @@
 from __future__ import annotations
 
-from typing import Type  # noqa
+import logging
+from typing import Any, Type  # noqa
+
 from pydantic import BaseModel, Field
 
+from .executor import BaseExecutor, LocalExecutor
 from .plugin import PLUGINS_REGISTRY, BasePlugin
-from .context import Context
+from .state import TaskState
+from .task_context import AttemptStatus, TaskContext
 from .trigger_rule import TriggerRule
+
+logger = logging.getLogger("beacon.action")
 
 
 class BaseAction(BaseModel):
@@ -48,4 +54,124 @@ class BaseAction(BaseModel):
             return PLUGINS_REGISTRY[self.uses]
         return self.uses
 
-    def warp_execute(self, context: Context): ...
+    def build_task_context(
+        self,
+        *,
+        run_id: str,
+        dag_id: str,
+        dag_version: str,
+        run_date: Any,
+        logical_date: Any,
+        data_interval_start: Any,
+        data_interval_end: Any,
+        params: dict[str, Any],
+        rendered_inputs: dict[str, Any],
+    ) -> TaskContext:
+        """Build a TaskContext for this action. Called by the scheduler."""
+        plugin_name = (
+            self.uses
+            if isinstance(self.uses, str)
+            else getattr(self.uses, "plugin_name", "unknown")
+        )
+        return TaskContext(
+            run_id=run_id,
+            dag_id=dag_id,
+            task_id=self.id,
+            dag_version=dag_version,
+            run_date=run_date,
+            logical_date=logical_date,
+            data_interval_start=data_interval_start,
+            data_interval_end=data_interval_end,
+            params=params,
+            inputs=rendered_inputs,
+            plugin_name=plugin_name,
+            retries=getattr(self, "retries", 0),
+            retry_delay=getattr(self, "retry_delay", 10),
+            execution_timeout=getattr(self, "execution_timeout", None),
+            exponential_backoff=getattr(self, "exponential_backoff", True),
+        )
+
+    async def warp_execute(
+        self,
+        task_ctx: TaskContext,
+        *,
+        executor: BaseExecutor | None = None,
+        set_state: Any = None,
+        on_retry_enqueue: Any = None,
+    ) -> TaskState:
+        """Main orchestration method called by the worker.
+
+        Handles the full lifecycle: state transitions, retries, callbacks.
+
+        Args:
+            task_ctx: The TaskContext from metadata store.
+            executor: The executor to run the task. Defaults to LocalExecutor.
+            set_state: Async callable(task_ctx, TaskState) to persist state.
+            on_retry_enqueue: Async callable(task_ctx, delay) to re-enqueue.
+
+        Returns:
+            The final TaskState after execution.
+        """
+        executor = executor or LocalExecutor()
+
+        # --- Transition: QUEUED → RUNNING ---
+        await self._transition(task_ctx, TaskState.RUNNING, set_state)
+        await self._fire_callbacks("start", task_ctx)
+
+        # --- Execute via executor ---
+        task_ctx = await executor.run_task(task_ctx)
+
+        # --- Evaluate result ---
+        last = task_ctx.last_attempt
+        if last and last.state == AttemptStatus.SUCCESS:
+            await self._transition(task_ctx, TaskState.SUCCESS, set_state)
+            await self._fire_callbacks("success", task_ctx)
+            return TaskState.SUCCESS
+
+        # Failed or timed out — decide retry or terminal failure
+        if task_ctx.has_retries_left:
+            await self._transition(task_ctx, TaskState.UP_FOR_RETRY, set_state)
+            await self._fire_callbacks("retry", task_ctx)
+            delay = task_ctx.next_retry_delay
+            if on_retry_enqueue:
+                await on_retry_enqueue(task_ctx, delay)
+            return TaskState.UP_FOR_RETRY
+
+        # No retries left
+        await self._transition(task_ctx, TaskState.FAILED, set_state)
+        await self._fire_callbacks("failure", task_ctx)
+        return TaskState.FAILED
+
+    async def _transition(
+        self,
+        task_ctx: TaskContext,
+        target: TaskState,
+        set_state: Any,
+    ) -> None:
+        """Validate and persist a state transition."""
+        # Note: current state is tracked externally by the metadata store.
+        # The validate_transition is called by set_state implementation.
+        if set_state:
+            await set_state(task_ctx, target)
+        logger.info(
+            "Task %s/%s → %s (attempt %d)",
+            task_ctx.dag_id,
+            task_ctx.task_id,
+            target,
+            task_ctx.current_attempt,
+        )
+
+    async def _fire_callbacks(self, event: str, task_ctx: TaskContext) -> None:
+        """Fire task-level callbacks for the given event."""
+        for cb in self.callbacks:
+            try:
+                if hasattr(cb, "on_event") and cb.on_event == event:
+                    if hasattr(cb, "notify"):
+                        await cb.notify(task_ctx, event)
+            except Exception as exc:
+                logger.error(
+                    "Callback error on %s for task %s: %s",
+                    event,
+                    task_ctx.task_id,
+                    exc,
+                )
