@@ -116,6 +116,7 @@ class PythonPlugin(BasePlugin):
             task_id=context.get("task_id", ""),
             attempt_number=context.get("attempt_number", 1),
             params=self.params,
+            upstream_outputs=context.get("upstream_outputs", {}),
             run_date=context.get("run_date"),
             logical_date=context.get("logical_date"),
             data_interval_start=context.get("data_interval_start"),

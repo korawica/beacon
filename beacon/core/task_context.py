@@ -128,6 +128,12 @@ class TaskContext(BaseModel):
         description="Task outputs written by the plugin after success",
     )
 
+    # --- Upstream Outputs (populated before execution) ---
+    upstream_outputs: dict[str, dict[str, Any]] = Field(
+        default_factory=dict,
+        description="Outputs from upstream tasks: {task_id: {key: value}}",
+    )
+
     @property
     def current_attempt(self) -> int:
         """Current attempt number (1-based). 0 if not started."""

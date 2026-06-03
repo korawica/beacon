@@ -86,6 +86,7 @@ class LocalExecutor(BaseExecutor):
             "data_interval_end": task_ctx.data_interval_end,
             "params": task_ctx.params,
             "attempt_number": task_ctx.current_attempt + 1,
+            "upstream_outputs": task_ctx.upstream_outputs,
         }
 
         # Start attempt tracking

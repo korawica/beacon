@@ -67,6 +67,10 @@ class Context(TypedDict, total=False):
     attempt_number: int
     """Current attempt number (1-based)."""
 
+    # Upstream outputs
+    upstream_outputs: dict[str, dict[str, Any]]
+    """Outputs from upstream tasks: {task_id: {key: value}}."""
+
     # Services (injected by executor)
     metadata: MetadataProtocol
     """Access to metadata store (read/write task context)."""

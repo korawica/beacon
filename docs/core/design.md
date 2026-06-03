@@ -864,10 +864,79 @@ running task instances.
 
 ---
 
+## Upstream Output Transfer
+
+### Concept
+
+Tasks can produce outputs (return a dict from `execute()`). Downstream tasks
+can access upstream outputs — but only through explicit declaration, not
+implicit global state like Airflow's XCom.
+
+**How it differs from XCom:**
+
+| XCom (Airflow)                    | Upstream Outputs (Beacon)              |
+|-----------------------------------|----------------------------------------|
+| Any task can push/pull from any   | Only declared upstream outputs visible |
+| Stored in shared XCom table       | Stored per-task in TaskContext         |
+| Unlimited size (DB bloat risk)    | Bounded: only dict return from plugin  |
+| Implicit coupling                 | Explicit: upstream_task_ids declared   |
+
+### Usage in YAML
+
+```yaml
+tasks:
+  - id: extract
+    type: task
+    uses: py
+    inputs:
+      py_file: ./scripts/extract.py
+
+  - id: transform
+    type: task
+    uses: py
+    upstream: [extract]
+    inputs:
+      py_file: ./scripts/transform.py
+      params:
+        file_count: "{{ outputs.extract.row_count }}"
+```
+
+### Usage in Python (via load_context)
+
+```python
+# scripts/transform.py
+from beacon import load_context
+
+def main():
+    ctx = load_context()
+    extract_out = ctx.upstream_outputs["extract"]
+    files = extract_out["files"]
+    ctx.logger.info("Processing %d files", len(files))
+    return {"processed": len(files)}
+```
+
+### How It Works
+
+1. Upstream task completes → outputs stored in TaskContext in metadata
+2. Scheduler enqueues downstream task with `upstream_task_ids=["extract"]`
+3. Worker resolves: reads upstream TaskContexts from metadata
+4. Populates `task_ctx.upstream_outputs = {"extract": {...}}`
+5. Plugin receives outputs via `context["upstream_outputs"]` or `load_context()`
+
+### Design Constraints
+
+- **Read-only** — downstream cannot modify upstream outputs
+- **Only from declared upstreams** — no arbitrary cross-DAG access
+- **Small data only** — outputs should be metadata (paths, counts, IDs), not payloads
+- **Resolved once** — at execution time, not re-read on retry (same outputs for all attempts)
+
+---
+
 ## What Beacon Does NOT Do (By Design)
 
-- **No XCom-like cross-task data passing** — Tasks communicate via external
-  storage (S3, GCS, database). TaskContext carries data TO a task, not between tasks.
+- **No unbounded cross-task data shuttle** — Upstream outputs are bounded (one dict
+  per upstream), declared explicitly, and read-only. For large data, use external
+  storage and pass references (paths, URIs) as output values.
 
 - **No embedded Python in YAML** — YAML is configuration. Python logic lives in
   `.py` files referenced by the `py` plugin.

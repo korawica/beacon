@@ -28,6 +28,7 @@ class RuntimeContext:
     task_id: str = ""
     attempt_number: int = 1
     params: dict[str, Any] = field(default_factory=dict)
+    upstream_outputs: dict[str, dict[str, Any]] = field(default_factory=dict)
     run_date: datetime | None = None
     logical_date: datetime | None = None
     data_interval_start: datetime | None = None

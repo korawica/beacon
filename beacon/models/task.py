@@ -41,12 +41,12 @@ class Task(BaseAction):
         description="Whether or not to exponentially backoff.",
     )
 
-    def outputs(self) -> dict:
-        """Return Task model outputs."""
-        return {
-            "metadata": {
-                "inputs": self.inputs,
-            },
-            "outputs": {},
-            "retries": self.retries,
-        }
+    # def outputs(self) -> dict:
+    #     """Return Task model outputs."""
+    #     return {
+    #         "metadata": {
+    #             "inputs": self.inputs,
+    #         },
+    #         "outputs": {},
+    #         "retries": self.retries,
+    #     }
