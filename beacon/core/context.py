@@ -14,9 +14,11 @@ from typing import Any, Protocol, TypedDict
 class MetadataProtocol(Protocol):
     """Protocol for metadata store access from within a plugin."""
 
-    async def get_task_context(self, run_id: str, task_id: str) -> Any: ...
+    async def get_task_context(
+        self, run_id: str, dag_id: str, task_id: str
+    ) -> Any: ...
     async def put_task_context(
-        self, run_id: str, task_id: str, ctx: Any
+        self, run_id: str, dag_id: str, task_id: str, ctx: Any
     ) -> None: ...
 
 

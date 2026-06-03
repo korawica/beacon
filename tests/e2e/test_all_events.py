@@ -168,11 +168,19 @@ class TestAllCallbackEvents:
         assert elapsed >= 3.0
 
         # Verify final state
-        state = asyncio.run(meta.get_task_state("run-events-001", "long-task"))
+        state = asyncio.run(
+            meta.get_task_state(
+                "run-events-001", "events-test-dag", "long-task"
+            )
+        )
         assert state == TaskState.SUCCESS
 
         # Verify outputs
-        ctx = asyncio.run(meta.get_task_context("run-events-001", "long-task"))
+        ctx = asyncio.run(
+            meta.get_task_context(
+                "run-events-001", "events-test-dag", "long-task"
+            )
+        )
         assert ctx.outputs == {"status": "completed_after_3s"}
         assert ctx.current_attempt == 1
 
@@ -210,11 +218,19 @@ class TestAllCallbackEvents:
         asyncio.run(_run())
 
         # Verify final state
-        state = asyncio.run(meta.get_task_state("run-events-001", "retry-task"))
+        state = asyncio.run(
+            meta.get_task_state(
+                "run-events-001", "events-test-dag", "retry-task"
+            )
+        )
         assert state == TaskState.SUCCESS
 
         # Verify attempt count
-        ctx = asyncio.run(meta.get_task_context("run-events-001", "retry-task"))
+        ctx = asyncio.run(
+            meta.get_task_context(
+                "run-events-001", "events-test-dag", "retry-task"
+            )
+        )
         assert ctx.current_attempt == 3
         assert ctx.outputs == {"succeeded_on_attempt": 3}
 
@@ -256,11 +272,19 @@ class TestAllCallbackEvents:
         asyncio.run(_run())
 
         # Verify final state
-        state = asyncio.run(meta.get_task_state("run-events-001", "fail-task"))
+        state = asyncio.run(
+            meta.get_task_state(
+                "run-events-001", "events-test-dag", "fail-task"
+            )
+        )
         assert state == TaskState.FAILED
 
         # Verify attempt count
-        ctx = asyncio.run(meta.get_task_context("run-events-001", "fail-task"))
+        ctx = asyncio.run(
+            meta.get_task_context(
+                "run-events-001", "events-test-dag", "fail-task"
+            )
+        )
         assert ctx.current_attempt == 2
         assert "permanent failure" in ctx.last_attempt.error
 
@@ -300,7 +324,9 @@ class TestAllCallbackEvents:
         asyncio.run(_run())
 
         state = asyncio.run(
-            meta.get_task_state("run-events-001", "no-retry-task")
+            meta.get_task_state(
+                "run-events-001", "events-test-dag", "no-retry-task"
+            )
         )
         assert state == TaskState.FAILED
 
@@ -402,7 +428,9 @@ class TestConcurrentExecution:
         # All 5 tasks should be SUCCESS
         for i in range(5):
             state = asyncio.run(
-                meta.get_task_state("run-events-001", f"task-{i}")
+                meta.get_task_state(
+                    "run-events-001", "events-test-dag", f"task-{i}"
+                )
             )
             assert state == TaskState.SUCCESS
 

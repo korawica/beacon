@@ -75,12 +75,12 @@ def test_json_metadata_crud(workspace):
     async def _test():
         # DagRun
         await meta.create_dag_run("run-1", "dag-1", "v1")
-        run = await meta.get_dag_run("run-1")
+        run = await meta.get_dag_run("run-1", "dag-1")
         assert run["dag_id"] == "dag-1"
         assert run["state"] == "running"
 
-        await meta.update_dag_run_state("run-1", "success")
-        run = await meta.get_dag_run("run-1")
+        await meta.update_dag_run_state("run-1", "dag-1", "success")
+        run = await meta.get_dag_run("run-1", "dag-1")
         assert run["state"] == "success"
 
         # TaskContext
@@ -96,13 +96,13 @@ def test_json_metadata_crud(workspace):
             inputs={},
             plugin_name="empty",
         )
-        await meta.put_task_context("run-1", "t1", ctx)
-        loaded = await meta.get_task_context("run-1", "t1")
+        await meta.put_task_context("run-1", "dag-1", "t1", ctx)
+        loaded = await meta.get_task_context("run-1", "dag-1", "t1")
         assert loaded.dag_id == "dag-1"
 
         # TaskState
-        await meta.set_task_state("run-1", "t1", TaskState.RUNNING)
-        state = await meta.get_task_state("run-1", "t1")
+        await meta.set_task_state("run-1", "dag-1", "t1", TaskState.RUNNING)
+        state = await meta.get_task_state("run-1", "dag-1", "t1")
         assert state == TaskState.RUNNING
 
     asyncio.run(_test())
@@ -154,11 +154,11 @@ def test_worker_success(workspace):
         await asyncio.gather(worker.run(), run_and_stop())
 
         # Verify state
-        state = await meta.get_task_state("run-001", "process")
+        state = await meta.get_task_state("run-001", "test-dag", "process")
         assert state == TaskState.SUCCESS
 
         # Verify context persisted with outputs
-        ctx = await meta.get_task_context("run-001", "process")
+        ctx = await meta.get_task_context("run-001", "test-dag", "process")
         assert ctx.outputs == {"result": "hello"}
 
     asyncio.run(_test())
@@ -259,10 +259,10 @@ def test_worker_retry_flow(workspace):
         await asyncio.gather(worker.run(), run_and_stop())
 
         # Should succeed on 3rd attempt
-        state = await meta.get_task_state("run-retry", "flaky")
+        state = await meta.get_task_state("run-retry", "test-dag", "flaky")
         assert state == TaskState.SUCCESS
 
-        ctx = await meta.get_task_context("run-retry", "flaky")
+        ctx = await meta.get_task_context("run-retry", "test-dag", "flaky")
         assert ctx.current_attempt == 3
         assert ctx.outputs == {"attempt_succeeded": 3}
 
@@ -304,10 +304,10 @@ def test_worker_final_failure(workspace):
 
         await asyncio.gather(worker.run(), run_and_stop())
 
-        state = await meta.get_task_state("run-001", "process")
+        state = await meta.get_task_state("run-001", "test-dag", "process")
         assert state == TaskState.FAILED
 
-        ctx = await meta.get_task_context("run-001", "process")
+        ctx = await meta.get_task_context("run-001", "test-dag", "process")
         assert ctx.current_attempt == 2  # original + 1 retry
         assert "permanent error" in ctx.last_attempt.error
 

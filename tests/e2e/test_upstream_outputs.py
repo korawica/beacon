@@ -104,9 +104,13 @@ def test_upstream_outputs_available_in_downstream(workspace):
     asyncio.run(_run())
 
     # Verify extract succeeded with outputs
-    state = asyncio.run(meta.get_task_state("run-dag-001", "extract"))
+    state = asyncio.run(
+        meta.get_task_state("run-dag-001", "etl-pipeline", "extract")
+    )
     assert state == TaskState.SUCCESS
-    ctx = asyncio.run(meta.get_task_context("run-dag-001", "extract"))
+    ctx = asyncio.run(
+        meta.get_task_context("run-dag-001", "etl-pipeline", "extract")
+    )
     assert ctx.outputs == {"files": ["a.csv", "b.csv"], "row_count": 1000}
 
     # Step 2: Run transform with extract as upstream
@@ -126,9 +130,13 @@ def test_upstream_outputs_available_in_downstream(workspace):
 
     asyncio.run(_run2())
 
-    state = asyncio.run(meta.get_task_state("run-dag-001", "transform"))
+    state = asyncio.run(
+        meta.get_task_state("run-dag-001", "etl-pipeline", "transform")
+    )
     assert state == TaskState.SUCCESS
-    ctx = asyncio.run(meta.get_task_context("run-dag-001", "transform"))
+    ctx = asyncio.run(
+        meta.get_task_context("run-dag-001", "etl-pipeline", "transform")
+    )
     assert ctx.outputs == {
         "processed_files": ["a.csv", "b.csv"],
         "input_rows": 1000,
@@ -156,9 +164,13 @@ def test_upstream_outputs_available_in_downstream(workspace):
 
     asyncio.run(_run3())
 
-    state = asyncio.run(meta.get_task_state("run-dag-001", "load"))
+    state = asyncio.run(
+        meta.get_task_state("run-dag-001", "etl-pipeline", "load")
+    )
     assert state == TaskState.SUCCESS
-    ctx = asyncio.run(meta.get_task_context("run-dag-001", "load"))
+    ctx = asyncio.run(
+        meta.get_task_context("run-dag-001", "etl-pipeline", "load")
+    )
     assert ctx.outputs == {
         "loaded_rows": 2000,
         "source_files": ["a.csv", "b.csv"],
@@ -183,6 +195,8 @@ def test_empty_upstream_outputs_when_no_upstream(workspace):
 
     asyncio.run(_run())
 
-    ctx = asyncio.run(meta.get_task_context("run-dag-001", "extract"))
+    ctx = asyncio.run(
+        meta.get_task_context("run-dag-001", "etl-pipeline", "extract")
+    )
     assert ctx.upstream_outputs == {}
     assert ctx.outputs == {"files": ["a.csv", "b.csv"], "row_count": 1000}
