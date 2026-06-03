@@ -6,6 +6,7 @@ from .core.trigger_rule import TriggerRule
 from .callback import OnEvent, OnTaskEvent, BaseHook
 from .providers.standard.hooks import JsonFileHook
 from .models.dag import Dag
+from .models.deployment import Deployment
 from .models.group import Group
 from .models.task import Task
 from .models.sensor import Sensor
