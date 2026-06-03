@@ -31,6 +31,7 @@ class ByHourBranchPlugin(BasePlugin):
     """
 
     plugin_name: ClassVar[str] = "by_hours"
+    compatible_actions: ClassVar[tuple[str, ...]] = ("branch",)
 
     hours: list[int] = Field(
         default_factory=list,

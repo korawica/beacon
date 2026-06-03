@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 
 from ..core import TriggerRule
 from .branch import Branch
+from .short_circuit import ShortCircuit
 from .task import Task
 from .sensor import Sensor
 
@@ -31,6 +32,7 @@ Action = Annotated[
         Task,
         Sensor,
         Branch,
+        ShortCircuit,
     ],
     Field(
         discriminator="type",

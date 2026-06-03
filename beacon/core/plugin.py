@@ -92,6 +92,12 @@ class BasePlugin(Templater, ABC, metaclass=PluginMeta):
     """
 
     plugin_name: ClassVar[str] = BASE_PLUGIN_NAME
+    compatible_actions: ClassVar[tuple[str, ...]] = ()
+    """Action types this plugin is compatible with.
+
+    Empty tuple means compatible with all action types.
+    Set to e.g. ("branch",) to restrict to branch actions only.
+    """
 
     @abstractmethod
     async def execute(self, context: Context):
