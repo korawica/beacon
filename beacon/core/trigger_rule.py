@@ -1,8 +1,8 @@
 """Dependency Trigger Rules.
 
-This module provides task terminal states, trigger rules, and the evaluation
-engine that determines whether a downstream task should run based on the
-states of its upstream dependencies.
+This module provides trigger rules and the evaluation engine that determines
+whether a downstream task should run based on the states of its upstream
+dependencies.
 
 References:
     https://www.astronomer.io/docs/learn/airflow-trigger-rules
@@ -11,21 +11,7 @@ References:
 from collections.abc import Callable, Sequence
 from enum import StrEnum
 
-
-class TaskState(StrEnum):
-    """All possible terminal states a task can reach.
-
-    Attributes:
-        SUCCESS: The task completed successfully.
-        FAILED: The task raised an unhandled exception.
-        SKIPPED: The task was intentionally skipped.
-        UPSTREAM_FAILED: The task was not run because an upstream failed.
-    """
-
-    SUCCESS = "success"
-    FAILED = "failed"
-    SKIPPED = "skipped"
-    UPSTREAM_FAILED = "upstream_failed"
+from beacon.core.state import TaskState
 
 
 class TriggerRule(StrEnum):
