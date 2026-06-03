@@ -1,16 +1,16 @@
-# Example: Python with Plugin
+# Example: Python with Standard
 
 ## Define Dag
 
 First, you must define your Dag object.
 
-```python
+```python title="dag.py"
 from beacon import Dag, Group, Param, Sensor, Task
 from beacon.providers.standard.plugins import EmptyPlugin
 from beacon.calllback import OnEvent, OnTaskEvent
 from beacon.metadata import SqliteMetadata
-from beacon.providers.msteam import msteam_adaptive_card
-from beacon.providers.smtp import send_mail
+from beacon.providers.msteam import MsTeamCallback
+from beacon.providers.smtp import SendmailCallback
 
 dag = Dag(
     id="hello-world",
@@ -22,11 +22,13 @@ dag = Dag(
     callbacks=[
         OnEvent(
             on_event="success",
-            hook=msteam_adaptive_card("https://my-webhook-url.com"),
+            hook=MsTeamCallback,
+            inputs={"webhook_url": "https://my-webhook-url.com"},
         ),
         OnEvent(
             on_event="failure",
-            hook=send_mail("on-call@email.com"),
+            hook=SendmailCallback,
+            inputs={"to": "on-call@email.com"},
         ),
     ],
     tasks=[

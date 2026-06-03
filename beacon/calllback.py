@@ -16,6 +16,7 @@ class OnEvent(BaseModel):
     hook: Callable = Field(
         description="A hook function to trigger DAG execution",
     )
+    inputs: dict
 
 
 class OnTaskEvent(BaseModel):
@@ -31,3 +32,4 @@ class OnTaskEvent(BaseModel):
     hook: Callable = Field(
         description="A hook function to trigger task execution",
     )
+    inputs: dict
