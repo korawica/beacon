@@ -12,7 +12,7 @@ Local --> Client --> UI (Web Server) <---> API Server  <---> Async Worker
                                    Metadata Store  |           |
                                                    |           |
                                                    v           v
-                                                  Logging Storage
+                                                  Logging Store
 ```
 
 **Components**:
@@ -21,8 +21,16 @@ Local --> Client --> UI (Web Server) <---> API Server  <---> Async Worker
 - Web Server (Frontend)
 - API Server (API Server)
 - Async Worker (e.g. Local, Celery, Kubernetes)
+  - LocalWorker: using by default, run tasks in local process, not distributed
+  - (Experiment) CeleryWorker: run tasks in distributed Celery workers, persistent
+  - (Experiment) KubernetesWorker: run tasks in distributed Kubernetes pods, persistent
 - Metadata Store (e.g. Sqlite, Postgres)
-- Logging Storage (e.g. Cloud Storage, S3, Elasticsearch)
+  - MemoryMetadata: using by default, store metadata in memory, not persistent
+  - (Experiment) SqliteMetadata: store metadata in local sqlite file, persistent
+  - (Experiment) PostgresMetadata: store metadata in Postgres database, persistent
+- Logging Store (e.g. Cloud Storage, S3, Elasticsearch)
+  - MemoryLogging: using by default, store logs in memory, not persistent
+  - LocalFileLogging: store logs in local file, not persistent
 
 ## DAG Parsing Flow
 

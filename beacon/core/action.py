@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+from typing import Type  # noqa
 from pydantic import BaseModel, Field
 
 from .plugin import PLUGINS_REGISTRY, BasePlugin
@@ -15,7 +18,7 @@ class BaseAction(BaseModel):
     id: str = Field(description="A task ID")
     type: str = Field(description="The type of action")
     desc: str = Field(default=None, description="A description of the task")
-    uses: str | type[BasePlugin] = Field(
+    uses: str | Type[BasePlugin] = Field(  # noqa: UP007
         description="An unsing plugin name in registry or a plugin model class",
     )
     upstream: list[str] = Field(

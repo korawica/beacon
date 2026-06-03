@@ -1,13 +1,14 @@
 default_install_hook_types: [pre-commit, commit-msg]
 default_language_version:
-    python: python3.11
+    python: python3.14
 
 repos:
 -   repo: https://github.com/asottile/pyupgrade
     rev:  v3.21.2
     hooks:
     -   id: pyupgrade
-        args: ["--py311-plus", "--keep-runtime-typing"]
+        args: ["--py314-plus", "--keep-runtime-typing"]
+        exclude: .*(core/action\.py)$
 
 -   repo: https://github.com/astral-sh/ruff-pre-commit
     rev:  v0.15.14

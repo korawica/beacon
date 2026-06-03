@@ -68,19 +68,19 @@ class PluginMeta(type(BaseModel)):
         name: str,
         bases: tuple[type, ...],
         attrs: dict[str, Any],
-        **kwargs,
+        **kwargs: Any,
     ) -> type[Self]:
         """Register its subclass to the ``PLUGINS_REGISTRY`` with the
         ``plugin_name`` class variable.
         """
-        new_cls = cast(
+        pydantic_cls = cast(
             type[Self], super().__new__(cls, name, bases, attrs, **kwargs)
         )
         register_plugin(
-            new_cls,
-            attrs.get("plugin_name", to_snake_case(new_cls.__name__)),
+            pydantic_cls,
+            attrs.get("plugin_name", to_snake_case(pydantic_cls.__name__)),
         )
-        return new_cls
+        return pydantic_cls
 
 
 class BasePlugin(Templater, ABC, metaclass=PluginMeta):
