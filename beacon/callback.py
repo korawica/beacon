@@ -6,29 +6,37 @@ for Python.
 """
 
 import logging
-import threading
 from abc import ABC, abstractmethod
 from typing import Any, ClassVar, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 logger = logging.getLogger("beacon.callback")
 
 CALLBACKS_REGISTRY: dict[str, type[Callback]] = {}
-_lock = threading.Lock()
 
 
 class Callback(ABC):
-    """Base callback class. All callbacks implement notify()."""
+    """Base callback class. All callbacks implement :meth:`notify`.
+
+    Subclasses auto-register when they declare a non-base ``hook_name``.
+    """
 
     hook_name: ClassVar[str] = "base"
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
-        name = getattr(cls, "hook_name", None)
-        if name and name != "base":
-            with _lock:
-                CALLBACKS_REGISTRY[name] = cls
+        name = cls.__dict__.get("hook_name")
+        if isinstance(name, str) and name and name != "base":
+            existing = CALLBACKS_REGISTRY.get(name)
+            if existing is not None and existing is not cls:
+                logger.warning(
+                    "Callback %r is being overridden (existing=%s, new=%s).",
+                    name,
+                    existing.__qualname__,
+                    cls.__qualname__,
+                )
+            CALLBACKS_REGISTRY[name] = cls
 
     @abstractmethod
     async def notify(self, event: str, data: dict[str, Any]) -> None:
@@ -51,10 +59,22 @@ def _resolve_hook(
     raise TypeError(f"Invalid callback type: {type(hook)}")
 
 
-class OnTaskEvent(BaseModel):
-    """Task-level callback configuration."""
+class _CachedHookMixin(BaseModel):
+    """Mixin: resolve the hook once and cache the instance."""
 
     model_config = {"arbitrary_types_allowed": True}
+
+    _resolved: Callback | None = PrivateAttr(default=None)
+
+    def _get_resolved(self) -> Callback:
+        if self._resolved is None:
+            # ``self.hook`` / ``self.inputs`` are provided by concrete subclasses
+            self._resolved = _resolve_hook(self.hook, self.inputs)  # type: ignore[attr-defined]
+        return self._resolved
+
+
+class OnTaskEvent(_CachedHookMixin):
+    """Task-level callback configuration."""
 
     on_event: Literal["start", "success", "failure", "retry", "skipped"] = (
         Field(description="Event that triggers this callback")
@@ -68,9 +88,9 @@ class OnTaskEvent(BaseModel):
     )
 
     async def notify(self, task_ctx: Any, event: str) -> None:
-        """Resolve callback and fire notification."""
-        resolved = _resolve_hook(self.hook, self.inputs)
-        data = {
+        """Resolve callback (cached) and fire notification."""
+        resolved = self._get_resolved()
+        data: dict[str, Any] = {
             "run_id": task_ctx.run_id,
             "dag_id": task_ctx.dag_id,
             "task_id": task_ctx.task_id,
@@ -84,10 +104,8 @@ class OnTaskEvent(BaseModel):
         await resolved.notify(event, data)
 
 
-class OnDagEvent(BaseModel):
+class OnDagEvent(_CachedHookMixin):
     """DAG-level callback configuration."""
-
-    model_config = {"arbitrary_types_allowed": True}
 
     on_event: Literal["start", "success", "failure", "finished"] = Field(
         description="Event that triggers this callback"
@@ -101,6 +119,6 @@ class OnDagEvent(BaseModel):
     )
 
     async def notify(self, data: dict[str, Any], event: str) -> None:
-        """Resolve callback and fire notification."""
-        resolved = _resolve_hook(self.hook, self.inputs)
+        """Resolve callback (cached) and fire notification."""
+        resolved = self._get_resolved()
         await resolved.notify(event, data)

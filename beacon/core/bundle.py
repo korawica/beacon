@@ -18,8 +18,8 @@ The bundle is responsible for:
 Production flow (GitBundle):
   - Team merges to main branch
   - GitBundle sync detects new commit → pulls repo
-  - Bundle.load() auto-discovers plugins → registers them
-  - Bundle.load() parses DAGs → stores versioned in metadata
+  - Bundle.load_plugins() auto-discovers plugins → registers them
+  - Bundle.discover_dags() returns paths for the scheduler/parser to consume
 """
 
 import hashlib
@@ -27,24 +27,21 @@ import importlib.util
 import logging
 import sys
 from pathlib import Path
-from typing import Any
 
 logger = logging.getLogger("beacon.bundle")
 
-_bundle_dag_cache: dict = {}
-
 
 class LocalBundle:
-    """Local Bundle.
+    """Local Bundle — loads DAGs and plugins from a local directory.
 
-    Loads DAGs and plugins from a local directory.
+    Expected structure::
 
-    Expected structure:
         {path}/
         ├── dags/       # DAG definitions (.yml or .py)
         └── plugins/    # Custom plugins (auto-registered)
 
-    Or flat structure (all files at root):
+    Or flat structure (all files at root)::
+
         {path}/
         ├── dag.yml
         └── my_plugin.py
@@ -69,35 +66,38 @@ class LocalBundle:
 
     @property
     def version(self) -> str:
-        """Compute bundle version from file content hashes."""
+        """Compute bundle version from file content hashes (cached)."""
         if self._version is None:
             self._version = self._compute_version()
-        return self._version  # type: ignore[return-value]
+        return self._version
 
     def load_plugins(self) -> list[str]:
         """Discover and register custom plugins from the plugins directory.
 
-        Scans ./plugins for .py files, imports them, and any BasePlugin
-        subclass defined in them will auto-register via PluginMeta.
-
-        Returns:
-            List of registered plugin names.
+        Scans ``./plugins`` for ``.py`` files, imports them, and reports
+        plugin names that were registered as a result. Detection uses a
+        before/after snapshot of :data:`PLUGINS_REGISTRY` so we don't have
+        to walk module attributes.
         """
         if self.plugins_path is None:
             return []
 
+        from .plugin import PLUGINS_REGISTRY
+
         registered: list[str] = []
         parent = str(self.plugins_path)
 
-        # Add plugins dir to sys.path so inter-plugin imports work
         if parent not in sys.path:
             sys.path.insert(0, parent)
 
-        for py_file in sorted(self.plugins_path.glob("**/*.py")):
+        plugins_root = self.plugins_path
+        for py_file in sorted(plugins_root.rglob("*.py")):
             if py_file.name.startswith("_"):
                 continue
 
-            module_name = f"_beacon_bundle_{self.name}_{py_file.stem}"
+            rel = py_file.relative_to(plugins_root).with_suffix("")
+            module_name = f"_beacon_bundle_{self.name}_" + "_".join(rel.parts)
+
             try:
                 spec = importlib.util.spec_from_file_location(
                     module_name, py_file
@@ -105,39 +105,27 @@ class LocalBundle:
                 if spec is None or spec.loader is None:
                     continue
                 module = importlib.util.module_from_spec(spec)
+
+                before = set(PLUGINS_REGISTRY)
                 spec.loader.exec_module(module)
+                after = set(PLUGINS_REGISTRY)
 
-                # Check what got registered
-                from .plugin import PLUGINS_REGISTRY
-
-                for attr_name in dir(module):
-                    attr = getattr(module, attr_name)
-                    if (
-                        isinstance(attr, type)
-                        and hasattr(attr, "plugin_name")
-                        and getattr(attr, "plugin_name", None)
-                        in PLUGINS_REGISTRY
-                    ):
-                        registered.append(attr.plugin_name)
-
-                logger.debug("Loaded plugin file: %s", py_file.name)
-            except Exception as exc:
+                newly = sorted(after - before)
+                registered.extend(newly)
+                logger.debug(
+                    "Loaded plugin file: %s (new=%s)", py_file.name, newly
+                )
+            except Exception as exc:  # noqa: BLE001
                 logger.error("Failed to load plugin %s: %s", py_file.name, exc)
 
         if registered:
             logger.info(
-                "Bundle %r registered plugins: %s",
-                self.name,
-                registered,
+                "Bundle %r registered plugins: %s", self.name, registered
             )
         return registered
 
     def discover_dags(self) -> list[Path]:
-        """Find all DAG definition files in the dags directory.
-
-        Returns:
-            List of paths to .yml/.yaml/.py DAG files.
-        """
+        """Find all DAG definition files in the dags directory."""
         dags: list[Path] = []
         for pattern in ("**/*.yml", "**/*.yaml", "**/*.py"):
             for f in sorted(self.dags_path.glob(pattern)):
@@ -146,32 +134,29 @@ class LocalBundle:
         return dags
 
     def _compute_version(self) -> str:
-        """Compute version hash from all files in the bundle."""
+        """Compute version hash from all files in the bundle.
+
+        Hash inputs are the relative path + file size + mtime_ns. This is
+        intentionally cheaper than reading every file's content while still
+        invalidating on any file modification.
+        """
         hasher = hashlib.sha256()
         for f in sorted(self.path.rglob("*")):
-            if f.is_file() and not f.name.startswith("."):
-                hasher.update(f.read_bytes())
+            if not f.is_file() or f.name.startswith("."):
+                continue
+            rel = f.relative_to(self.path).as_posix()
+            stat = f.stat()
+            hasher.update(f"{rel}|{stat.st_size}|{stat.st_mtime_ns}\n".encode())
         return hasher.hexdigest()[:12]
 
 
 class GitBundle:
-    """Git Bundle.
+    """Git Bundle — syncs from a Git repository.
 
-    Syncs from a Git repository. The API server pulls the repo on webhook
-    or polling, then loads plugins and parses DAGs.
-
-    Production flow:
-        1. API server receives webhook (push to main)
-        2. git pull → local checkout at {sync_path}/{name}
-        3. version = commit SHA
-        4. load_plugins() → register custom plugins
-        5. discover_dags() → parse and store in metadata
-
-    Attributes:
-        name: Bundle identifier.
-        repo_url: Git repository URL.
-        branch: Target branch to sync from.
-        sync_path: Local path where repo is checked out.
+    The actual ``git pull`` is delegated to whatever process drives the
+    sync (a CLI command, a webhook handler, etc.). This class only owns
+    the in-memory view: where the checkout lives, and a :class:`LocalBundle`
+    that points into it.
     """
 
     def __init__(
@@ -190,20 +175,19 @@ class GitBundle:
         self._local: LocalBundle | None = None
 
     @property
-    def version(self) -> str:
-        """Git commit SHA as version (set after sync)."""
-        # In real implementation: git rev-parse HEAD
-        return self._local.version if self._local else "unsynced"
-
-    @property
     def local(self) -> LocalBundle:
-        """Get the local bundle after sync."""
+        """Return (and lazily create) the local view of the sync checkout."""
         if self._local is None:
             root = self.sync_path
             if self.sub_path:
                 root = root / self.sub_path
             self._local = LocalBundle(name=self.name, path=root)
-        return self.local
+        return self._local
+
+    @property
+    def version(self) -> str:
+        """Bundle version (file-hash based)."""
+        return self.local.version
 
     def load_plugins(self) -> list[str]:
         """Load plugins from the synced repo."""
@@ -212,17 +196,3 @@ class GitBundle:
     def discover_dags(self) -> list[Path]:
         """Discover DAGs from the synced repo."""
         return self.local.discover_dags()
-
-
-class GcsBundle:
-    """GCS Bundle."""
-
-    def __init__(
-        self,
-        name: str,
-        ref: str,
-        connection: Any,
-    ) -> None:
-        self.name = name
-        self.ref = ref
-        self.connection = connection

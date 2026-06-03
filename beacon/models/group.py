@@ -17,7 +17,7 @@ class Group(BaseModel):
         description="A list of upstream task ID(s)",
     )
     trigger_rule: str = Field(
-        default=TriggerRule.ALL_DONE,
+        default=TriggerRule.ALL_SUCCESS,
         description="The trigger rule",
     )
     actions: list[ActionType] = Field(

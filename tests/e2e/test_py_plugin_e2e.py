@@ -186,48 +186,33 @@ def test_py_plugin_function_not_found(tmp_script):
 
 
 def test_full_action_lifecycle(tmp_script):
-    """Test the full wrap_execute lifecycle through BaseAction."""
-    from beacon.models.task import Task
+    """Replaces the old wrap_execute-based test: lifecycle now lives in the
+    scheduler. Verify a single-task Dag goes through SUCCESS via Dag.run()."""
+    from beacon import Dag, Task
 
     script = tmp_script(USER_SCRIPT_SIMPLE)
 
-    task = Task(
-        id="process",
-        uses="py",
-        retries=2,
+    dag = Dag(
+        id="lifecycle-dag",
+        owners=["dev"],
+        actions=[
+            Task(
+                id="process",
+                uses="py",
+                retries=2,
+                inputs={
+                    "py_file": script,
+                    "py_function": "main",
+                    "params": {"source_system": "lifecycle_test"},
+                },
+            ),
+        ],
     )
 
-    # In real flow, the scheduler builds TaskContext with fully rendered inputs
-    task_ctx = task.build_task_context(
-        run_id="run-lifecycle-001",
-        dag_id="test-dag",
-        dag_version="v1",
-        run_date=datetime(2026, 6, 3),
-        logical_date=datetime(2026, 6, 2),
-        data_interval_start=datetime(2026, 6, 2),
-        data_interval_end=datetime(2026, 6, 3),
-        params={"source_system": "lifecycle_test"},
-        rendered_inputs={
-            "py_file": script,
-            "py_function": "main",
-            "params": {"source_system": "lifecycle_test"},
-        },
-    )
-
-    states_recorded = []
-
-    async def mock_set_state(ctx, state):
-        states_recorded.append(state)
-
-    async def run():
-        return await task.wrap_execute(
-            task_ctx,
-            set_state=mock_set_state,
-        )
-
-    result_state = asyncio.run(run())
-
-    assert result_state == TaskState.SUCCESS
-    assert TaskState.RUNNING in states_recorded
-    assert TaskState.SUCCESS in states_recorded
-    assert task_ctx.outputs == {"processed": "lifecycle_test", "rows": 42}
+    result = dag.run()
+    assert result["state"] == "success"
+    assert result["states"]["process"] == TaskState.SUCCESS
+    assert result["outputs"]["process"] == {
+        "processed": "lifecycle_test",
+        "rows": 42,
+    }

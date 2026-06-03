@@ -1,37 +1,6 @@
 import re
-import importlib
-import pkgutil
-from types import ModuleType
 
 from .const import JINJA_PATTERN
-
-
-def load_all_plugins(package: str | ModuleType):
-    """Accept either a package string 'myapp.plugins' or a module object
-    `import myapp.plugins`.
-
-    Examples:
-        Load plugins from a package string
-
-        ```python
-        load_all_plugins("myapp.plugins")
-        ```
-
-        Load plugins from a module object
-
-        ```python
-        import myapp.plugins
-        load_all_plugins(myapp.plugins)
-        ```
-    """
-    if isinstance(package, str):
-        package = importlib.import_module(package)
-
-    for finder, name, is_pkg in pkgutil.walk_packages(
-        path=package.__path__,
-        prefix=package.__name__ + ".",
-    ):
-        importlib.import_module(name)
 
 
 def is_jinja(s: str, pure: bool = True) -> bool:
@@ -63,9 +32,8 @@ def is_jinja(s: str, pure: bool = True) -> bool:
         return False
 
     if not pure:
-        return True  # ℹ️ NOTE: Any jinja present is enough
+        return True
 
-    # ℹ️ NOTE: ``pure=True`` -→ all characters must be inside JINJA tags
     combined = "".join(m.group(0) for m in matches)
     return combined == s
 

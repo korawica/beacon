@@ -142,11 +142,11 @@ No inheritance chains. No mixin layers. One class, one method.
 
 Plugins control retry behavior by which exception they raise:
 
-| Raises | Behavior | Use Case |
-|---|---|---|
+| Raises          | Behavior                             | Use Case                           |
+|-----------------|--------------------------------------|------------------------------------|
 | Any `Exception` | Retry up to `retries`, then `FAILED` | Transient errors (network timeout) |
-| `TaskFailed` | Immediately `FAILED` — skip retries | Permanent errors (table missing) |
-| `TaskSkipped` | Mark `SKIPPED` — skip retries | Nothing to do (empty partition) |
+| `TaskFailed`    | Immediately `FAILED` — skip retries  | Permanent errors (table missing)   |
+| `TaskSkipped`   | Mark `SKIPPED` — skip retries        | Nothing to do (empty partition)    |
 
 ```python
 from beacon.errors import TaskFailed, TaskSkipped
@@ -225,10 +225,10 @@ Same registry. Same version pinning. Same resolution.
 
 ### Event Types
 
-| Event Owner | Events |
-|---|---|
+| Event Owner   | Events                                            |
+|---------------|---------------------------------------------------|
 | `OnTaskEvent` | `start`, `success`, `failure`, `retry`, `skipped` |
-| `OnDagEvent` | `start`, `success`, `failure`, `finished` |
+| `OnDagEvent`  | `start`, `success`, `failure`, `finished`         |
 
 `finished` fires on any DAG terminal state (success or failure).
 
@@ -496,11 +496,11 @@ class MetadataProtocol(Protocol):
 
 ### Implementations
 
-| Store | Persistence | Use Case |
-|-------|-------------|----------|
-| `JsonMetadata` | Sharded JSON files | Default, dev → 1000 DAGs |
-| `SqliteMetadata` | Local SQLite | Single-node production (pending) |
-| `PostgresMetadata` | Postgres | Multi-node production (pending) |
+| Store              | Persistence        | Use Case                         |
+|--------------------|--------------------|----------------------------------|
+| `JsonMetadata`     | Sharded JSON files | Default, dev → 1000 DAGs         |
+| `SqliteMetadata`   | Local SQLite       | Single-node production (pending) |
+| `PostgresMetadata` | Postgres           | Multi-node production (pending)  |
 
 ### JsonMetadata Performance
 
@@ -805,14 +805,14 @@ Deployment ── binds a Dag to: cron + timezone + params values + variables_re
 
 ### Action Types
 
-| Type           | Purpose                | Async Behavior                  |
-|----------------|------------------------|---------------------------------|
-| `task`         | Execute a unit of work | Run to completion               |
-| `sensor`       | Wait for a condition   | Async poll with sleep           |
-| `branch`       | Choose downstream path | Evaluate condition, return path |
-| `short_circuit`| Skip all downstream    | Evaluate boolean, skip if false |
-| `group`        | Bundle nested actions  | Container, not a runtime unit   |
-| `foreach_task` | Fan-out over a list    | Spawn N task instances (future) |
+| Type            | Purpose                | Async Behavior                  |
+|-----------------|------------------------|---------------------------------|
+| `task`          | Execute a unit of work | Run to completion               |
+| `sensor`        | Wait for a condition   | Async poll with sleep           |
+| `branch`        | Choose downstream path | Evaluate condition, return path |
+| `short_circuit` | Skip all downstream    | Evaluate boolean, skip if false |
+| `group`         | Bundle nested actions  | Container, not a runtime unit   |
+| `foreach_task`  | Fan-out over a list    | Spawn N task instances (future) |
 
 All share `BaseAction` and resolve plugins the same way.
 All execute via `async def execute()`.
@@ -1306,23 +1306,23 @@ The `dryrun()` function validates teardown references:
 
 ### Comparison with Airflow
 
-| Aspect | Airflow | Beacon |
-|--------|---------|--------|
-| Syntax | `task.as_teardown(setups=setup_task)` | `teardown: "setup-task-id"` |
-| Scope | Task-level (decorator-like) | Action-level (field in model) |
-| Multiple pairs | Supported | Supported |
-| Always-run | `trigger_rule=ALL_DONE_SETUP_SUCCESS` | Implicit for teardown tasks |
-| Validation | Runtime error if setup missing | dryrun catches at parse time |
+| Aspect         | Airflow                               | Beacon                        |
+|----------------|---------------------------------------|-------------------------------|
+| Syntax         | `task.as_teardown(setups=setup_task)` | `teardown: "setup-task-id"`   |
+| Scope          | Task-level (decorator-like)           | Action-level (field in model) |
+| Multiple pairs | Supported                             | Supported                     |
+| Always-run     | `trigger_rule=ALL_DONE_SETUP_SUCCESS` | Implicit for teardown tasks   |
+| Validation     | Runtime error if setup missing        | dryrun catches at parse time  |
 
 ### Implementation Plan
 
-| Step | Description | Verify |
-|------|-------------|--------|
-| 1. ✅ Add `teardown` field to `BaseAction` | Field accepted on all action types | Unit: Task(teardown="x") parses |
-| 2. ✅ Validate teardown ref in `dryrun()` | Catches missing/self references | Unit: dryrun errors for bad refs |
-| 3. Worker resolves teardown scheduling | Teardown runs after all dependents terminal | E2E: teardown runs after failure |
-| 4. Teardown accesses setup outputs | via upstream_outputs | E2E: reads cluster endpoint |
-| 5. Teardown failure is non-fatal | DagRun state ignores teardown failures | E2E: dag SUCCESS despite teardown fail |
+| Step                                      | Description                                 | Verify                                 |
+|-------------------------------------------|---------------------------------------------|----------------------------------------|
+| 1. ✅ Add `teardown` field to `BaseAction` | Field accepted on all action types          | Unit: Task(teardown="x") parses        |
+| 2. ✅ Validate teardown ref in `dryrun()`  | Catches missing/self references             | Unit: dryrun errors for bad refs       |
+| 3. Worker resolves teardown scheduling    | Teardown runs after all dependents terminal | E2E: teardown runs after failure       |
+| 4. Teardown accesses setup outputs        | via upstream_outputs                        | E2E: reads cluster endpoint            |
+| 5. Teardown failure is non-fatal          | DagRun state ignores teardown failures      | E2E: dag SUCCESS despite teardown fail |
 
 ---
 
@@ -1353,26 +1353,26 @@ The `dryrun()` function validates teardown references:
 
 ## Implementation Priority
 
-| Phase  | Deliverable                                           | Status   | Validates                           |
-|--------|-------------------------------------------------------|----------|-------------------------------------|
-| **0**  | `PythonPlugin.execute()` end-to-end                   | ✅ Done   | Core loop                           |
-| **0**  | TaskContext + Attempt + LocalExecutor                 | ✅ Done   | State persistence + retry           |
-| **0**  | Bundle plugin auto-discovery (`./plugins/`)           | ✅ Done   | Custom plugin deployment            |
-| **0**  | `load_context()` for user Python files                | ✅ Done   | Runtime access without coupling     |
-| **0**  | Task state machine with valid transitions             | ✅ Done   | Enforced lifecycle                  |
-| **1**  | Callback system with registry resolution              | ✅ Done   | Callback parity Python/YAML         |
-| **1**  | Async worker with retry scheduling                    | ✅ Done   | Full lifecycle transitions          |
-| **1**  | `MetadataProtocol` + `JsonMetadata` (sharded)         | ✅ Done   | Pluggable persistence, 1000+ DAGs   |
-| **1**  | `TaskFailed` / `TaskSkipped` exception support        | ✅ Done   | Plugin-driven retry/skip control    |
-| **1**  | `Deployment` model (reusable DAG + per-env config)    | ✅ Done   | DAG reuse without duplication       |
-| **1**  | `Dag.run()` / `Dag.test()` / `Dag.dryrun()` methods  | ✅ Done   | Developer workflow (validate → test → run) |
-| **2**  | Setup & Teardown (`teardown` field + worker scheduling)| Pending  | Cluster/staging lifecycle           |
-| **2**  | GitBundle sync (webhook + git pull)                   | Pending  | Production deployment               |
-| **2**  | DockerExecutor / KubernetesExecutor                   | Pending  | Remote execution                    |
-| **2**  | `foreach_task` action type                            | Pending  | Dynamic parallelism                 |
-| **2**  | Scheduler + metadata-based DAG versioning             | Pending  | Scale to 10k DAGs                   |
-| **2**  | API Server (FastAPI) + Deployment CRUD endpoints      | Pending  | Programmatic control plane          |
-| **3**  | Remote plugin registry (`org/name@version`)           | Pending  | Ecosystem growth                    |
-| **3**  | Web UI (Deployments list + DAG viewer + log viewer)   | Pending  | Observability                       |
-| **3**  | BatchExecutor (AWS Batch / Cloud Batch)               | Pending  | Cloud-native execution              |
-| **3**  | `SqliteMetadata` / `PostgresMetadata`                 | Pending  | Production-grade persistence        |
+| Phase   | Deliverable                                             | Status   | Validates                                  |
+|---------|---------------------------------------------------------|----------|--------------------------------------------|
+| **0**   | `PythonPlugin.execute()` end-to-end                     | ✅ Done   | Core loop                                  |
+| **0**   | TaskContext + Attempt + LocalExecutor                   | ✅ Done   | State persistence + retry                  |
+| **0**   | Bundle plugin auto-discovery (`./plugins/`)             | ✅ Done   | Custom plugin deployment                   |
+| **0**   | `load_context()` for user Python files                  | ✅ Done   | Runtime access without coupling            |
+| **0**   | Task state machine with valid transitions               | ✅ Done   | Enforced lifecycle                         |
+| **1**   | Callback system with registry resolution                | ✅ Done   | Callback parity Python/YAML                |
+| **1**   | Async worker with retry scheduling                      | ✅ Done   | Full lifecycle transitions                 |
+| **1**   | `MetadataProtocol` + `JsonMetadata` (sharded)           | ✅ Done   | Pluggable persistence, 1000+ DAGs          |
+| **1**   | `TaskFailed` / `TaskSkipped` exception support          | ✅ Done   | Plugin-driven retry/skip control           |
+| **1**   | `Deployment` model (reusable DAG + per-env config)      | ✅ Done   | DAG reuse without duplication              |
+| **1**   | `Dag.run()` / `Dag.test()` / `Dag.dryrun()` methods     | ✅ Done   | Developer workflow (validate → test → run) |
+| **2**   | Setup & Teardown (`teardown` field + worker scheduling) | Pending  | Cluster/staging lifecycle                  |
+| **2**   | GitBundle sync (webhook + git pull)                     | Pending  | Production deployment                      |
+| **2**   | DockerExecutor / KubernetesExecutor                     | Pending  | Remote execution                           |
+| **2**   | `foreach_task` action type                              | Pending  | Dynamic parallelism                        |
+| **2**   | Scheduler + metadata-based DAG versioning               | Pending  | Scale to 10k DAGs                          |
+| **2**   | API Server (FastAPI) + Deployment CRUD endpoints        | Pending  | Programmatic control plane                 |
+| **3**   | Remote plugin registry (`org/name@version`)             | Pending  | Ecosystem growth                           |
+| **3**   | Web UI (Deployments list + DAG viewer + log viewer)     | Pending  | Observability                              |
+| **3**   | BatchExecutor (AWS Batch / Cloud Batch)                 | Pending  | Cloud-native execution                     |
+| **3**   | `SqliteMetadata` / `PostgresMetadata`                   | Pending  | Production-grade persistence               |

@@ -2,15 +2,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field as dc_field
-from typing import Any, Type  # noqa
+from typing import Any, Type  # noqa: UP035  # see note in `uses` field below
 
 from pydantic import BaseModel, Field
 
 from ..callback import OnTaskEvent
-from .executor import BaseExecutor, LocalExecutor
 from .plugin import PLUGINS_REGISTRY, BasePlugin
-from .state import TaskState
-from .task_context import AttemptStatus, TaskContext
+from .task_context import TaskContext
 from .trigger_rule import TriggerRule
 
 
@@ -19,27 +17,37 @@ logger = logging.getLogger("beacon.action")
 
 @dataclass
 class DownstreamDirective:
-    """What to do with downstream tasks after this action completes."""
+    """What to do with downstream tasks after this action completes.
+
+    Returned by :meth:`BaseAction.evaluate_downstream` and consumed by the
+    scheduler to choose which downstream tasks to schedule vs. skip.
+    """
 
     schedule: list[str] = dc_field(default_factory=list)
     """Task IDs to move to SCHEDULED → QUEUED."""
 
     skip: list[str] = dc_field(default_factory=list)
-    """Task IDs to mark SKIPPED (and transitively skip their downstream)."""
+    """Task IDs to mark SKIPPED (and let their downstream cascade via trigger rules)."""
 
 
 class BaseAction(BaseModel):
     """Base Action Model.
 
-    This base action model is used for all actions, Task, Branch, Sensor, or
-    Group.
+    Pure pydantic *definition* of one node in a DAG. Lifecycle/state-machine
+    behavior lives in the scheduler — this class intentionally does NOT own
+    state transitions or execution.
     """
 
     id: str = Field(description="A task ID")
     type: str = Field(description="The type of action")
-    desc: str = Field(default=None, description="A description of the task")
-    uses: str | Type[BasePlugin] = Field(  # noqa: UP007
-        description="An unsing plugin name in registry or a plugin model class",
+    desc: str | None = Field(
+        default=None, description="A description of the task"
+    )
+    uses: str | Type[BasePlugin] = Field(  # noqa: UP006
+        # NOTE: Cannot use lowercase ``type[BasePlugin]`` here because this
+        # model already defines a ``type`` field above which shadows the
+        # builtin ``type`` during forward-ref resolution.
+        description="A plugin name in the registry or a plugin model class",
     )
     upstream: list[str] = Field(
         default_factory=list,
@@ -54,7 +62,7 @@ class BaseAction(BaseModel):
         ),
     )
     trigger_rule: str = Field(
-        default=TriggerRule.ALL_DONE,
+        default=TriggerRule.ALL_SUCCESS,
         description="The trigger rule",
     )
     callbacks: list[OnTaskEvent] = Field(
@@ -63,18 +71,28 @@ class BaseAction(BaseModel):
     )
     inputs: dict[str, Any] = Field(
         default_factory=dict,
-        description="A dict of inputs that will passing to its plugin model",
+        description="A dict of inputs that will pass to its plugin model",
     )
 
-    def plugin(self) -> type[BaseModel]:
-        """Get the plugin model."""
+    def plugin(self) -> Type[BasePlugin]:  # noqa: UP006
+        """Resolve the plugin class for this action.
+
+        Raises:
+            LookupError: when ``uses`` is a string that is not registered.
+        """
         if isinstance(self.uses, str):
             if self.uses not in PLUGINS_REGISTRY:
-                raise NotImplementedError(
-                    f"A plugin {self.uses!r} not implemented on the registry.",
+                raise LookupError(
+                    f"Plugin {self.uses!r} not found in registry.",
                 )
             return PLUGINS_REGISTRY[self.uses]
         return self.uses
+
+    def plugin_name(self) -> str:
+        """Return the canonical plugin name for this action."""
+        if isinstance(self.uses, str):
+            return self.uses
+        return getattr(self.uses, "plugin_name", "unknown")
 
     def evaluate_downstream(
         self,
@@ -104,11 +122,6 @@ class BaseAction(BaseModel):
         rendered_inputs: dict[str, Any],
     ) -> TaskContext:
         """Build a TaskContext for this action. Called by the scheduler."""
-        plugin_name = (
-            self.uses
-            if isinstance(self.uses, str)
-            else getattr(self.uses, "plugin_name", "unknown")
-        )
         return TaskContext(
             run_id=run_id,
             dag_id=dag_id,
@@ -120,94 +133,9 @@ class BaseAction(BaseModel):
             data_interval_end=data_interval_end,
             params=params,
             inputs=rendered_inputs,
-            plugin_name=plugin_name,
+            plugin_name=self.plugin_name(),
             retries=getattr(self, "retries", 0),
             retry_delay=getattr(self, "retry_delay", 10),
             execution_timeout=getattr(self, "execution_timeout", None),
             exponential_backoff=getattr(self, "exponential_backoff", True),
         )
-
-    async def wrap_execute(
-        self,
-        task_ctx: TaskContext,
-        *,
-        executor: BaseExecutor | None = None,
-        set_state: Any = None,
-        on_retry_enqueue: Any = None,
-    ) -> TaskState:
-        """Main orchestration method called by the worker.
-
-        Handles the full lifecycle: state transitions, retries, callbacks.
-
-        Args:
-            task_ctx: The TaskContext from metadata store.
-            executor: The executor to run the task. Defaults to LocalExecutor.
-            set_state: Async callable(task_ctx, TaskState) to persist state.
-            on_retry_enqueue: Async callable(task_ctx, delay) to re-enqueue.
-
-        Returns:
-            The final TaskState after execution.
-        """
-        executor = executor or LocalExecutor()
-
-        # --- Transition: QUEUED → RUNNING ---
-        await self._transition(task_ctx, TaskState.RUNNING, set_state)
-        await self._fire_callbacks("start", task_ctx)
-
-        # --- Execute via executor ---
-        task_ctx = await executor.run_task(task_ctx)
-
-        # --- Evaluate result ---
-        last = task_ctx.last_attempt
-        if last and last.state == AttemptStatus.SUCCESS:
-            await self._transition(task_ctx, TaskState.SUCCESS, set_state)
-            await self._fire_callbacks("success", task_ctx)
-            return TaskState.SUCCESS
-
-        # Failed or timed out — decide retry or terminal failure
-        if task_ctx.has_retries_left:
-            await self._transition(task_ctx, TaskState.UP_FOR_RETRY, set_state)
-            await self._fire_callbacks("retry", task_ctx)
-            delay = task_ctx.next_retry_delay
-            if on_retry_enqueue:
-                await on_retry_enqueue(task_ctx, delay)
-            return TaskState.UP_FOR_RETRY
-
-        # No retries left
-        await self._transition(task_ctx, TaskState.FAILED, set_state)
-        await self._fire_callbacks("failure", task_ctx)
-        return TaskState.FAILED
-
-    async def _transition(
-        self,
-        task_ctx: TaskContext,
-        target: TaskState,
-        set_state: Any,
-    ) -> None:
-        """Validate and persist a state transition."""
-        # Note: current state is tracked externally by the metadata store.
-        # The validate_transition is called by set_state implementation.
-        if set_state:
-            await set_state(task_ctx, target)
-        logger.info(
-            "Task %s/%s → %s (attempt %d)",
-            task_ctx.dag_id,
-            task_ctx.task_id,
-            target,
-            task_ctx.attempt_number,
-        )
-
-    async def _fire_callbacks(self, event: str, task_ctx: TaskContext) -> None:
-        """Fire task-level callbacks for the given event."""
-        for cb in self.callbacks:
-            try:
-                if hasattr(cb, "on_event") and cb.on_event == event:
-                    if hasattr(cb, "notify"):
-                        await cb.notify(task_ctx, event)
-            except Exception as exc:
-                logger.error(
-                    "Callback error on %s for task %s: %s",
-                    event,
-                    task_ctx.task_id,
-                    exc,
-                )

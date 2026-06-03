@@ -1,13 +1,12 @@
-import threading
 import logging
 from abc import ABC, abstractmethod
-from typing import ClassVar, Final, Self, Any, cast
+from typing import Any, ClassVar, Final, Self, cast
 
 from pydantic import BaseModel
 
+from ..utils import to_snake_case
 from .context import Context
 from .templater import Templater
-from ..utils import to_snake_case
 
 __all__ = (
     "BASE_PLUGIN_NAME",
@@ -16,79 +15,87 @@ __all__ = (
     "register_plugin",
 )
 
-logger = logging.getLogger("beacon.core")
+logger = logging.getLogger("beacon.core.plugin")
 
 
 BASE_PLUGIN_NAME: Final[str] = "base"
 PLUGINS_REGISTRY: dict[str, type] = {}
-_lock = threading.Lock()
 
 
-def register_plugin(cls: type, name: str | None = None) -> None:
-    """Register a plugin class.
+def register_plugin(
+    cls: type,
+    name: str | None = None,
+    *,
+    allow_override: bool = False,
+) -> None:
+    """Register a plugin class in the global registry.
 
     Args:
-        cls (type):
-            A subclass of Plugin model
-        name (str | None, optional):
-            A Plugin name that want to use instead of its class attribute name,
-            ``plugin_name``.
-
-    !!! example
-
-        ```python
-        from beacon.core import BasePlugin, register_plugin
-
-        register_plugin(BasePlugin)
-        ```
+        cls: The plugin class. Must be a :class:`BasePlugin` subclass.
+        name: Optional explicit name. Falls back to ``cls.plugin_name``.
+        allow_override: When False (default), overriding an existing entry
+            logs a warning. Use ``True`` for bundle-level intentional override.
     """
-    plugin_name: str = name or getattr(cls, "plugin_name", BASE_PLUGIN_NAME)
-    if (
-        plugin_name and plugin_name != BASE_PLUGIN_NAME
-        # NOTE: Disallow override the plugins.
-        # and plugin_name not in PLUGINS_REGISTRY
-    ):
-        if plugin_name in PLUGINS_REGISTRY:
-            logger.debug("Overriding plugin registry with %s", plugin_name)
+    plugin_name: str | None = name or getattr(cls, "plugin_name", None)
+    if not plugin_name or plugin_name == BASE_PLUGIN_NAME:
+        return
 
-        # NOTE: Start update plugin to the registry.
-        with _lock:
-            PLUGINS_REGISTRY[plugin_name] = cls
+    existing = PLUGINS_REGISTRY.get(plugin_name)
+    if existing is not None and existing is not cls:
+        if allow_override:
+            logger.debug(
+                "Overriding plugin %r: %s -> %s",
+                plugin_name,
+                existing.__qualname__,
+                cls.__qualname__,
+            )
+        else:
+            logger.warning(
+                "Plugin %r is being overridden (existing=%s, new=%s). "
+                "Pass allow_override=True to silence this warning.",
+                plugin_name,
+                existing.__qualname__,
+                cls.__qualname__,
+            )
+
+    PLUGINS_REGISTRY[plugin_name] = cls
 
 
 class PluginMeta(type(BaseModel)):
     """Plugin Metaclass.
 
-    This metaclass auto-registers every BasePlugin subclass to the ``PLUGINS_REGISTRY``
-    for using from any Action model by ``uses`` field.
+    Auto-registers a subclass to :data:`PLUGINS_REGISTRY` **only when the
+    subclass explicitly declares** a ``plugin_name`` class variable in its
+    own body. This avoids accidentally registering intermediate / abstract
+    bases under an auto-generated snake_case name.
     """
 
     def __new__(
-        cls: type[Self],
+        mcs: type[Self],
         name: str,
         bases: tuple[type, ...],
         attrs: dict[str, Any],
         **kwargs: Any,
     ) -> type[Self]:
-        """Register its subclass to the ``PLUGINS_REGISTRY`` with the
-        ``plugin_name`` class variable.
-        """
         pydantic_cls = cast(
-            type[Self], super().__new__(cls, name, bases, attrs, **kwargs)
+            type[Self], super().__new__(mcs, name, bases, attrs, **kwargs)
         )
-        register_plugin(
-            pydantic_cls,
-            attrs.get("plugin_name", to_snake_case(pydantic_cls.__name__)),
-        )
+        explicit_name = attrs.get("plugin_name")
+        if (
+            isinstance(explicit_name, str)
+            and explicit_name
+            and explicit_name != BASE_PLUGIN_NAME
+        ):
+            register_plugin(pydantic_cls, explicit_name)
         return pydantic_cls
 
 
 class BasePlugin(Templater, ABC, metaclass=PluginMeta):
     """Base Plugin Model.
 
-    This class auto-registers every BasePlugin subclass with the ``plugin_name``
-    class variable to the ``PLUGINS_REGISTRY`` for using from any Action model by
-    ``uses`` field.
+    Subclasses register themselves automatically when they declare a
+    ``plugin_name`` ClassVar. Subclasses without an explicit ``plugin_name``
+    are treated as intermediate/abstract and are NOT auto-registered.
     """
 
     plugin_name: ClassVar[str] = BASE_PLUGIN_NAME
@@ -96,7 +103,7 @@ class BasePlugin(Templater, ABC, metaclass=PluginMeta):
     """Action types this plugin is compatible with.
 
     Empty tuple means compatible with all action types.
-    Set to e.g. ("branch",) to restrict to branch actions only.
+    Set to e.g. ``("branch",)`` to restrict to branch actions only.
     """
 
     @abstractmethod
@@ -110,3 +117,8 @@ class BasePlugin(Templater, ABC, metaclass=PluginMeta):
         raise NotImplementedError(
             "The execute method of BasePlugin is not implemented."
         )
+
+
+# Silence ruff unused-import for the helper kept for callers who want manual
+# snake_case names (rare, but part of the public surface).
+_ = to_snake_case
