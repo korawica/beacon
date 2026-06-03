@@ -263,7 +263,7 @@ def test_worker_retry_flow(workspace):
         assert state == TaskState.SUCCESS
 
         ctx = await meta.get_task_context("run-retry", "test-dag", "flaky")
-        assert ctx.current_attempt == 3
+        assert ctx.attempt_number == 3
         assert ctx.outputs == {"attempt_succeeded": 3}
 
     asyncio.run(_test())
@@ -308,7 +308,7 @@ def test_worker_final_failure(workspace):
         assert state == TaskState.FAILED
 
         ctx = await meta.get_task_context("run-001", "test-dag", "process")
-        assert ctx.current_attempt == 2  # original + 1 retry
+        assert ctx.attempt_number == 2  # original + 1 retry
         assert "permanent error" in ctx.last_attempt.error
 
     asyncio.run(_test())

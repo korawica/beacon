@@ -32,8 +32,8 @@ logger = logging.getLogger("beacon.dryrun")
 
 
 @dataclass
-class ValidationError:
-    """A single validation error."""
+class DryRunIssue:
+    """A single validation issue found during dry-run."""
 
     task_id: str
     category: str  # "plugin", "compatibility", "graph", "template"
@@ -56,7 +56,7 @@ class DryRunResult:
     """Result of a DAG dry run."""
 
     dag_id: str
-    errors: list[ValidationError] = field(default_factory=list)
+    errors: list[DryRunIssue] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     resolved_tasks: list[ResolvedTask] = field(default_factory=list)
     task_order: list[str] = field(default_factory=list)
@@ -145,7 +145,7 @@ def dryrun(
 
     # Build task map
     task_map: dict[str, Any] = {}
-    _flatten_tasks(dag.tasks, task_map)
+    _flatten_actions(dag.actions, task_map)
 
     # --- Check 1: Plugin existence ---
     for task_id, action in task_map.items():
@@ -156,7 +156,7 @@ def dryrun(
         )
         if isinstance(action.uses, str) and action.uses not in PLUGINS_REGISTRY:
             result.errors.append(
-                ValidationError(
+                DryRunIssue(
                     task_id=task_id,
                     category="plugin",
                     message=f"Plugin {action.uses!r} not found in registry.",
@@ -176,7 +176,7 @@ def dryrun(
             action_type = getattr(action, "type", "task")
             if compatible and action_type not in compatible:
                 result.errors.append(
-                    ValidationError(
+                    DryRunIssue(
                         task_id=task_id,
                         category="compatibility",
                         message=(
@@ -192,7 +192,7 @@ def dryrun(
         for up in action.upstream:
             if up not in all_ids:
                 result.errors.append(
-                    ValidationError(
+                    DryRunIssue(
                         task_id=task_id,
                         category="graph",
                         message=f"Upstream {up!r} does not exist in DAG.",
@@ -203,7 +203,7 @@ def dryrun(
     cycle = _detect_cycle(task_map)
     if cycle:
         result.errors.append(
-            ValidationError(
+            DryRunIssue(
                 task_id=cycle[0],
                 category="graph",
                 message=f"Cycle detected: {' → '.join(cycle)}",
@@ -242,12 +242,12 @@ def dryrun(
     return result
 
 
-def _flatten_tasks(tasks: list, task_map: dict[str, Any]) -> None:
+def _flatten_actions(actions: list, task_map: dict[str, Any]) -> None:
     """Flatten nested groups into a flat task map."""
-    for action in tasks:
-        if hasattr(action, "tasks") and action.tasks:
+    for action in actions:
+        if hasattr(action, "actions") and action.actions:
             # Group — recurse
-            _flatten_tasks(action.tasks, task_map)
+            _flatten_actions(action.actions, task_map)
         else:
             task_map[action.id] = action
 

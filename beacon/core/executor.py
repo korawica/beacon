@@ -76,6 +76,12 @@ class LocalExecutor(BaseExecutor):
             context={"jinja_renderer": None},
         )
 
+        # Start attempt tracking first so attempt_number is correct in Context
+        task_ctx.start_attempt(
+            executor=self.executor_type,
+            executor_ref=None,
+        )
+
         # Build lightweight Context for the plugin
         context: Context = {
             "run_id": task_ctx.run_id,
@@ -86,15 +92,9 @@ class LocalExecutor(BaseExecutor):
             "data_interval_start": task_ctx.data_interval_start,
             "data_interval_end": task_ctx.data_interval_end,
             "params": task_ctx.params,
-            "attempt_number": task_ctx.current_attempt + 1,
+            "attempt_number": task_ctx.attempt_number,
             "upstream_outputs": task_ctx.upstream_outputs,
         }
-
-        # Start attempt tracking
-        task_ctx.start_attempt(
-            executor=self.executor_type,
-            executor_ref=None,
-        )
 
         try:
             # Run with optional timeout

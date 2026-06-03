@@ -1,6 +1,6 @@
 """Callback and Hook system.
 
-Hooks are triggered on task/DAG lifecycle events. They use the same
+Callbacks are triggered on task/DAG lifecycle events. They use the same
 registry pattern as plugins — string resolution for YAML, class reference
 for Python.
 """
@@ -14,12 +14,12 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger("beacon.callback")
 
-HOOKS_REGISTRY: dict[str, type[BaseHook]] = {}
+CALLBACKS_REGISTRY: dict[str, type[Callback]] = {}
 _lock = threading.Lock()
 
 
-class BaseHook(ABC):
-    """Base hook class. All hooks implement notify()."""
+class Callback(ABC):
+    """Base callback class. All callbacks implement notify()."""
 
     hook_name: ClassVar[str] = "base"
 
@@ -28,27 +28,27 @@ class BaseHook(ABC):
         name = getattr(cls, "hook_name", None)
         if name and name != "base":
             with _lock:
-                HOOKS_REGISTRY[name] = cls
+                CALLBACKS_REGISTRY[name] = cls
 
     @abstractmethod
     async def notify(self, event: str, data: dict[str, Any]) -> None:
-        """Fire the hook with event data."""
+        """Fire the callback with event data."""
         raise NotImplementedError
 
 
 def _resolve_hook(
-    hook: str | type[BaseHook] | BaseHook, inputs: dict
-) -> BaseHook:
-    """Resolve a hook from string name, class, or instance."""
-    if isinstance(hook, BaseHook):
+    hook: str | type[Callback] | Callback, inputs: dict
+) -> Callback:
+    """Resolve a callback from string name, class, or instance."""
+    if isinstance(hook, Callback):
         return hook
     if isinstance(hook, str):
-        if hook not in HOOKS_REGISTRY:
-            raise ValueError(f"Hook {hook!r} not found in registry.")
-        return HOOKS_REGISTRY[hook](**inputs)
-    if isinstance(hook, type) and issubclass(hook, BaseHook):
+        if hook not in CALLBACKS_REGISTRY:
+            raise ValueError(f"Callback {hook!r} not found in registry.")
+        return CALLBACKS_REGISTRY[hook](**inputs)
+    if isinstance(hook, type) and issubclass(hook, Callback):
         return hook(**inputs)
-    raise TypeError(f"Invalid hook type: {type(hook)}")
+    raise TypeError(f"Invalid callback type: {type(hook)}")
 
 
 class OnTaskEvent(BaseModel):
@@ -60,21 +60,21 @@ class OnTaskEvent(BaseModel):
         Field(description="Event that triggers this callback")
     )
     hook: str | Any = Field(
-        description="Hook name (string) or hook class/instance"
+        description="Callback name (string) or callback class/instance"
     )
     inputs: dict[str, Any] = Field(
         default_factory=dict,
-        description="Arguments passed to the hook constructor",
+        description="Arguments passed to the callback constructor",
     )
 
     async def notify(self, task_ctx: Any, event: str) -> None:
-        """Resolve hook and fire notification."""
+        """Resolve callback and fire notification."""
         resolved = _resolve_hook(self.hook, self.inputs)
         data = {
             "run_id": task_ctx.run_id,
             "dag_id": task_ctx.dag_id,
             "task_id": task_ctx.task_id,
-            "attempt": task_ctx.current_attempt,
+            "attempt": task_ctx.attempt_number,
             "params": task_ctx.params,
         }
         if task_ctx.last_attempt and task_ctx.last_attempt.error:
@@ -84,23 +84,23 @@ class OnTaskEvent(BaseModel):
         await resolved.notify(event, data)
 
 
-class OnEvent(BaseModel):
+class OnDagEvent(BaseModel):
     """DAG-level callback configuration."""
 
     model_config = {"arbitrary_types_allowed": True}
 
-    on_event: Literal["start", "success", "failure", "complete"] = Field(
+    on_event: Literal["start", "success", "failure", "finished"] = Field(
         description="Event that triggers this callback"
     )
     hook: str | Any = Field(
-        description="Hook name (string) or hook class/instance"
+        description="Callback name (string) or callback class/instance"
     )
     inputs: dict[str, Any] = Field(
         default_factory=dict,
-        description="Arguments passed to the hook constructor",
+        description="Arguments passed to the callback constructor",
     )
 
     async def notify(self, data: dict[str, Any], event: str) -> None:
-        """Resolve hook and fire notification."""
+        """Resolve callback and fire notification."""
         resolved = _resolve_hook(self.hook, self.inputs)
         await resolved.notify(event, data)

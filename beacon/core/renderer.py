@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import logging
 from collections.abc import Callable
 from functools import partial
@@ -33,8 +31,8 @@ def _is_preserve_mode(env: Environment) -> bool:
     return issubclass(env.undefined, DebugUndefined)
 
 
-class JinjaRender:
-    """Jinja Render object.
+class JinjaRenderer:
+    """Jinja Renderer object.
 
     This object use for common create :simple-jinja: Jinja environment and template
     any component outside _Airflow_ Jinja templating.
@@ -42,7 +40,7 @@ class JinjaRender:
     !!! example
 
         ```py
-        renderer = JinjaRender(user_defined_macros={"bar": "baz"})
+        renderer = JinjaRenderer(user_defined_macros={"bar": "baz"})
         renderer.render_template({"foo": "{{ bar }}"})
         # Output: {'foo': 'baz'}
         ```
@@ -127,7 +125,7 @@ class JinjaRender:
         env_factory: type[Environment] | None = None,
         is_native: bool | None = None,
     ) -> Self:
-        """Create a new JinjaRender object by copying and overriding parameters.
+        """Create a new JinjaRenderer object by copying and overriding parameters.
 
         All collection parameters (filters, macros, searchpath, kwargs) are
         **merged** with the current instance's values rather than replaced, so
@@ -135,7 +133,7 @@ class JinjaRender:
         current instance when omitted.
 
         Returns:
-            Self: A new JinjaRender object with the overridden parameters.
+            Self: A new JinjaRenderer object with the overridden parameters.
         """
         return self.__class__(
             template_fields=template_fields or self.template_fields,
@@ -167,7 +165,7 @@ class JinjaRender:
                 current globals Jinja environment.
 
         Returns:
-            Self: The current JinjaRender object.
+            Self: The current JinjaRenderer object.
         """
         self.user_defined_macros.update(values)
         self.env.globals.update(values)

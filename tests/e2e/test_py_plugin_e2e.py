@@ -138,7 +138,7 @@ def test_py_plugin_failure_and_retry(tmp_script):
 
     # Second attempt — fails again
     result = asyncio.run(executor.run_task(result))
-    assert result.current_attempt == 2
+    assert result.attempt_number == 2
     assert result.last_attempt.state == AttemptStatus.FAILED
     assert result.has_retries_left is False  # no more retries
 
@@ -186,7 +186,7 @@ def test_py_plugin_function_not_found(tmp_script):
 
 
 def test_full_action_lifecycle(tmp_script):
-    """Test the full warp_execute lifecycle through BaseAction."""
+    """Test the full wrap_execute lifecycle through BaseAction."""
     from beacon.models.task import Task
 
     script = tmp_script(USER_SCRIPT_SIMPLE)
@@ -220,7 +220,7 @@ def test_full_action_lifecycle(tmp_script):
         states_recorded.append(state)
 
     async def run():
-        return await task.warp_execute(
+        return await task.wrap_execute(
             task_ctx,
             set_state=mock_set_state,
         )

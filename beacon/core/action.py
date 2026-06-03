@@ -6,11 +6,13 @@ from typing import Any, Type  # noqa
 
 from pydantic import BaseModel, Field
 
+from ..callback import OnTaskEvent
 from .executor import BaseExecutor, LocalExecutor
 from .plugin import PLUGINS_REGISTRY, BasePlugin
 from .state import TaskState
 from .task_context import AttemptStatus, TaskContext
 from .trigger_rule import TriggerRule
+
 
 logger = logging.getLogger("beacon.action")
 
@@ -47,11 +49,11 @@ class BaseAction(BaseModel):
         default=TriggerRule.ALL_DONE,
         description="The trigger rule",
     )
-    callbacks: list = Field(
+    callbacks: list[OnTaskEvent] = Field(
         default_factory=list,
-        description="A list of callback object(s)",
+        description="A list of task-level callback object(s)",
     )
-    inputs: dict[str, str | int | float | bool] = Field(
+    inputs: dict[str, Any] = Field(
         default_factory=dict,
         description="A dict of inputs that will passing to its plugin model",
     )
@@ -117,7 +119,7 @@ class BaseAction(BaseModel):
             exponential_backoff=getattr(self, "exponential_backoff", True),
         )
 
-    async def warp_execute(
+    async def wrap_execute(
         self,
         task_ctx: TaskContext,
         *,
@@ -184,7 +186,7 @@ class BaseAction(BaseModel):
             task_ctx.dag_id,
             task_ctx.task_id,
             target,
-            task_ctx.current_attempt,
+            task_ctx.attempt_number,
         )
 
     async def _fire_callbacks(self, event: str, task_ctx: TaskContext) -> None:

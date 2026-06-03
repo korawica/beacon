@@ -20,13 +20,13 @@ class Group(BaseModel):
         default=TriggerRule.ALL_DONE,
         description="The trigger rule",
     )
-    tasks: list[Action] = Field(
+    actions: list[ActionType] = Field(
         default_factory=list,
-        description="A list of task model(s)",
+        description="A list of action(s) contained in this group",
     )
 
 
-Action = Annotated[
+ActionType = Annotated[
     Union[
         Group,
         Task,
@@ -36,6 +36,6 @@ Action = Annotated[
     ],
     Field(
         discriminator="type",
-        description="An actions models",
+        description="Any action model",
     ),
 ]

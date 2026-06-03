@@ -25,12 +25,12 @@ def test_task_context_lifecycle():
         retries=2,
     )
 
-    assert ctx.current_attempt == 0
+    assert ctx.attempt_number == 0
     assert ctx.has_retries_left is True
 
     # First attempt fails
     ctx.start_attempt(executor="local")
-    assert ctx.current_attempt == 1
+    assert ctx.attempt_number == 1
     ctx.finish_attempt(state=AttemptStatus.FAILED, error="connection refused")
     assert ctx.last_attempt.state == AttemptStatus.FAILED
     assert ctx.has_retries_left is True

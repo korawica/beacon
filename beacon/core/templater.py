@@ -6,7 +6,7 @@ from pydantic import BaseModel, ValidationInfo
 from pydantic.functional_validators import model_validator
 from pydantic_core import PydanticUndefined
 
-from .renderer import JinjaRender
+from .renderer import JinjaRenderer
 
 
 logger = logging.getLogger("beacon.core")
@@ -75,7 +75,7 @@ class Templater(BaseModel):
         cls,
         name: str,
         data: Any,
-        renderer: JinjaRender,
+        renderer: JinjaRenderer,
         *,
         from_default: bool = False,
     ) -> Any:
@@ -84,7 +84,7 @@ class Templater(BaseModel):
         Args:
             name (str): The name of the template field.
             data (Any): The data to be rendered.
-            renderer (JinjaRender): The Jinja renderer instance.
+            renderer (JinjaRenderer): The Jinja renderer instance.
             from_default (bool): Whether the data is from the default value.
 
         Returns:
@@ -138,7 +138,7 @@ class Templater(BaseModel):
             and info.context
             and "jinja_renderer" in info.context
         ):
-            renderer: JinjaRender = info.context["jinja_renderer"]
+            renderer: JinjaRenderer = info.context["jinja_renderer"]
             for field_name in cls.template_fields:
                 field_value: Any = data.get(field_name)
                 from_default: bool = False

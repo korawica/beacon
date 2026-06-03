@@ -58,9 +58,11 @@ def load_context() -> RuntimeContext:
     return ctx
 
 
-def _set_runtime_context(ctx: RuntimeContext) -> None:
+def set_runtime_context(ctx: RuntimeContext) -> None:
+    """Set the current beacon runtime context (called by the executor)."""
     _current.set(ctx)
 
 
-def _clear_runtime_context() -> None:
+def clear_runtime_context() -> None:
+    """Clear the current beacon runtime context (called by the executor)."""
     _current.set(None)

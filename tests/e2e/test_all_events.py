@@ -182,7 +182,7 @@ class TestAllCallbackEvents:
             )
         )
         assert ctx.outputs == {"status": "completed_after_3s"}
-        assert ctx.current_attempt == 1
+        assert ctx.attempt_number == 1
 
         # Verify callbacks: start + success
         alerts = _read_alerts(workspace["alerts"])
@@ -231,7 +231,7 @@ class TestAllCallbackEvents:
                 "run-events-001", "events-test-dag", "retry-task"
             )
         )
-        assert ctx.current_attempt == 3
+        assert ctx.attempt_number == 3
         assert ctx.outputs == {"succeeded_on_attempt": 3}
 
         # Verify callback events
@@ -285,7 +285,7 @@ class TestAllCallbackEvents:
                 "run-events-001", "events-test-dag", "fail-task"
             )
         )
-        assert ctx.current_attempt == 2
+        assert ctx.attempt_number == 2
         assert "permanent failure" in ctx.last_attempt.error
 
         # Verify callback events

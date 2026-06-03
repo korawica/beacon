@@ -44,14 +44,14 @@ vars() resolved against                  params.* resolved against
 variable store (per stage)               TaskContext.params
     │                                        │
     v                                        v
-schedule.params = {                      TaskContext.inputs = {
+deployment.params = {                    TaskContext.inputs = {
   source: "postgres"  ← was "{{vars}}"    table: "postgres"  ← was "{{params}}"
 }                                        }
 ```
 
 ### Pass 1: `vars()` → `params` (at trigger time)
 
-Variables from `variables.yml` (stage-specific) are resolved into DAG params:
+Variables from `variables.yml` (stage-specific) are resolved into Deployment params:
 
 ```yaml
 # variables.yml
@@ -65,7 +65,7 @@ stages:
 ```
 
 ```yaml
-# schedule params (before rendering)
+# deployment params (before rendering)
 params:
   source: "{{ vars('source_system') }}"
   bucket: "{{ vars('gcs_bucket') }}"
@@ -81,8 +81,8 @@ params:
 Task inputs referencing `params` are resolved into concrete values stored in TaskContext:
 
 ```yaml
-# Task definition
-tasks:
+# Action definition
+actions:
   - id: extract
     uses: py
     inputs:
@@ -104,7 +104,7 @@ inputs:
 Downstream tasks can reference upstream outputs via the `outputs` namespace:
 
 ```yaml
-tasks:
+actions:
   - id: transform
     uses: py
     upstream: [extract]
@@ -261,7 +261,7 @@ Deploy time              Trigger time            Pre-execute            Execute 
 variables.yml parsed     vars() resolved         params.* resolved      Plugin receives
   │                        │                       │                    final concrete
   v                        v                       v                    values from
-stages:                  schedule.params =       TaskContext.inputs =   Context dict
+stages:                  deployment.params =     TaskContext.inputs =   Context dict
   prod:                  {                       {                      (no Jinja
     source: postgres       source: "postgres"      table: "postgres"     rendering)
     bucket: my-bucket      bucket: "my-bucket"     path: "my-bucket/x"
@@ -303,7 +303,7 @@ class GcsExtractPlugin(BasePlugin):
 
 Usage in YAML:
 ```yaml
-tasks:
+actions:
   - id: extract
     uses: gcs-extract
     inputs:

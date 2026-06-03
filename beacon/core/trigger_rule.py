@@ -49,7 +49,7 @@ class TriggerRule(StrEnum):
     NONE_FAILED_OR_SKIPPED = "none_failed_or_skipped"
 
 
-class _Counts:
+class _UpstreamStateCounts:
     """Aggregated counts of upstream task terminal states.
 
     Args:
@@ -103,7 +103,7 @@ class _Counts:
         return self.done >= self.total
 
 
-_RULES: dict[TriggerRule, Callable[[_Counts], bool]] = {
+_RULES: dict[TriggerRule, Callable[[_UpstreamStateCounts], bool]] = {
     TriggerRule.ALL_SUCCESS: lambda c: c.all_done and c.success == c.total,
     TriggerRule.ALL_FAILED: lambda c: c.all_done and c.failed == c.total,
     TriggerRule.ALL_DONE: lambda c: c.all_done,
@@ -121,7 +121,7 @@ _RULES: dict[TriggerRule, Callable[[_Counts], bool]] = {
 }
 
 
-def is_trigger_satisfied(
+def evaluate_trigger_rule(
     rule: TriggerRule | str,
     upstream_states: Sequence[TaskState | str],
     *,
@@ -148,13 +148,13 @@ def is_trigger_satisfied(
             enum value.
 
     Examples:
-        >>> is_trigger_satisfied(TriggerRule.ALL_SUCCESS, [TaskState.SUCCESS, TaskState.SUCCESS])
+        >>> evaluate_trigger_rule(TriggerRule.ALL_SUCCESS, [TaskState.SUCCESS, TaskState.SUCCESS])
         True
 
-        >>> is_trigger_satisfied("none_failed", ["success", "skipped"])
+        >>> evaluate_trigger_rule("none_failed", ["success", "skipped"])
         True
 
-        >>> is_trigger_satisfied(TriggerRule.ONE_SUCCESS, [TaskState.SUCCESS], total_upstreams=5)
+        >>> evaluate_trigger_rule(TriggerRule.ONE_SUCCESS, [TaskState.SUCCESS], total_upstreams=5)
         True
     """
     if isinstance(rule, str):
@@ -172,10 +172,10 @@ def is_trigger_satisfied(
     if handler is None:
         raise ValueError(f"Unknown trigger rule: {rule!r}")
 
-    return handler(_Counts(states, total))
+    return handler(_UpstreamStateCounts(states, total))
 
 
-def evaluate_all_rules(
+def evaluate_all_trigger_rules(
     upstream_states: Sequence[TaskState | str],
     *,
     total_upstreams: int | None = None,
@@ -193,7 +193,7 @@ def evaluate_all_rules(
         A dict mapping each ``TriggerRule`` to whether it is satisfied.
 
     Examples:
-        >>> results = evaluate_all_rules(["success", "failed", "skipped"])
+        >>> results = evaluate_all_trigger_rules(["success", "failed", "skipped"])
         >>> results[TriggerRule.ALL_DONE]
         True
         >>> results[TriggerRule.ALL_SUCCESS]
@@ -207,5 +207,5 @@ def evaluate_all_rules(
     if total == 0:
         return {rule: True for rule in TriggerRule}
 
-    counts = _Counts(states, total)
+    counts = _UpstreamStateCounts(states, total)
     return {rule: handler(counts) for rule, handler in _RULES.items()}

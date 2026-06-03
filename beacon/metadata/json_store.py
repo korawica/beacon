@@ -40,12 +40,16 @@ class JsonMetadata:
     """JSON file metadata store optimized for 1000+ DAG workloads."""
 
     def __init__(self, base_path: str | Path = "./metadata.db") -> None:
-        self.base = Path(base_path)
-        self._dag_runs = self.base / "dag_runs"
-        self._task_contexts = self.base / "task_contexts"
-        self._task_states = self.base / "task_states"
+        self.base_path = Path(base_path)
+        self._dag_runs_dir = self.base_path / "dag_runs"
+        self._task_contexts_dir = self.base_path / "task_contexts"
+        self._task_states_dir = self.base_path / "task_states"
         # Create top-level directories
-        for d in (self._dag_runs, self._task_contexts, self._task_states):
+        for d in (
+            self._dag_runs_dir,
+            self._task_contexts_dir,
+            self._task_states_dir,
+        ):
             d.mkdir(parents=True, exist_ok=True)
 
         # In-memory cache for task states (hot path for scheduler)
@@ -157,7 +161,7 @@ class JsonMetadata:
 
         Useful for upstream output resolution by the scheduler.
         """
-        run_dir = self._task_contexts / dag_id / run_id
+        run_dir = self._task_contexts_dir / dag_id / run_id
         if not run_dir.exists():
             return {}
         results = {}
@@ -219,7 +223,7 @@ class JsonMetadata:
         Used by the scheduler for dependency evaluation — avoids N
         individual file reads when evaluating which tasks are ready.
         """
-        run_dir = self._task_states / dag_id / run_id
+        run_dir = self._task_states_dir / dag_id / run_id
         if not run_dir.exists():
             return {}
         results = {}
@@ -254,15 +258,15 @@ class JsonMetadata:
     # --- Path Helpers (sharded by dag_id) ---
 
     def _dag_run_path(self, dag_id: str, run_id: str) -> Path:
-        return self._dag_runs / dag_id / f"{run_id}.json"
+        return self._dag_runs_dir / dag_id / f"{run_id}.json"
 
     def _task_context_path(
         self, dag_id: str, run_id: str, task_id: str
     ) -> Path:
-        return self._task_contexts / dag_id / run_id / f"{task_id}.json"
+        return self._task_contexts_dir / dag_id / run_id / f"{task_id}.json"
 
     def _task_state_path(self, dag_id: str, run_id: str, task_id: str) -> Path:
-        return self._task_states / dag_id / run_id / f"{task_id}.json"
+        return self._task_states_dir / dag_id / run_id / f"{task_id}.json"
 
 
 # --- Async I/O Helpers ---

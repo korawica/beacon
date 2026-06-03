@@ -6,7 +6,7 @@ plugin via `uses` and declares its dependencies via `upstream`.
 === "YAML Example"
 
     ```yaml
-    tasks:
+    actions:
       - id: extract
         type: task
         uses: py
@@ -53,11 +53,11 @@ Common to all action types:
 | Field       | Type   | Description                                                          |
 |-------------|--------|----------------------------------------------------------------------|
 | id          | str    | Unique identifier within the DAG                                     |
-| type        | str    | `task`, `sensor`, `branch`, `short_circuit`                          |
+| type        | str    | `task`, `sensor`, `branch`, `short_circuit`, `group`                 |
 | uses        | str    | Plugin name to execute                                               |
 | inputs      | dict   | Parameters passed to the plugin (supports Jinja)                     |
-| upstream    | list   | Task IDs that must complete before this action runs                   |
-| callbacks   | list   | Callbacks fired on events (start, success, failure, retry)           |
+| upstream    | list   | Task IDs that must complete before this action runs                  |
+| callbacks   | list[OnTaskEvent] | Callbacks fired on events (`start`, `success`, `failure`, `retry`, `skipped`) |
 
 ---
 
@@ -76,7 +76,7 @@ The standard action. Runs a plugin, stores outputs, schedules all downstream.
 
 **Plugin contract:** Return `dict` (stored as outputs) or `None`.
 
-**Downstream behavior:** On SUCCESS → schedule all downstream. On FAILED → mark downstream UPSTREAM_FAILED.
+**Downstream behavior:** On SUCCESS → schedule all downstream. On FAILED → mark downstream UPSTREAM_FAILED. On SKIPPED → mark downstream SKIPPED.
 
 ```yaml
 - id: process
@@ -85,6 +85,34 @@ The standard action. Runs a plugin, stores outputs, schedules all downstream.
   inputs:
     py_file: ./process.py
   retries: 3
+```
+
+#### Controlling Retry from Inside a Plugin
+
+Plugins decide retry behavior by which exception they raise:
+
+| Raises | Behavior |
+|---|---|
+| Any `Exception` | Retry up to `retries`, then `FAILED` |
+| `TaskFailed` | Immediately `FAILED` — skip remaining retries |
+| `TaskSkipped` | Mark `SKIPPED` — skip remaining retries |
+
+```python
+from beacon.errors import TaskFailed, TaskSkipped
+
+async def execute(self, context: Context) -> dict:
+    try:
+        rows = await fetch(self.source)
+    except ConnectionTimeout:
+        raise  # Generic exception → beacon retries
+
+    if not await schema_exists(self.target):
+        raise TaskFailed("Target schema missing — no point retrying")
+
+    if not rows:
+        raise TaskSkipped("No new data this run")
+
+    return {"rows": len(rows)}
 ```
 
 ---
@@ -231,6 +259,29 @@ def main():
 
 ---
 
+### Group
+
+Container for nested actions. Groups have no runtime behavior of their own —
+they are flattened by the scheduler. Use groups to organize related actions
+visually and to apply shared upstream dependencies.
+
+```yaml
+- id: ingest-stage
+  type: group
+  upstream: [start]
+  actions:
+    - id: extract-customers
+      type: task
+      uses: py
+      inputs: { py_file: ./extract_customers.py }
+    - id: extract-orders
+      type: task
+      uses: py
+      inputs: { py_file: ./extract_orders.py }
+```
+
+---
+
 ## How Action Types Affect Scheduling
 
 After a task completes, the scheduler calls `action.evaluate_downstream()`:
@@ -256,6 +307,7 @@ After a task completes, the scheduler calls `action.evaluate_downstream()`:
 | Sensor         | Schedule all downstream (condition was met)             |
 | Branch         | Schedule only `outputs["branch"]` list, skip rest       |
 | ShortCircuit   | If `outputs["continue"]` is False, skip ALL downstream  |
+| Group          | (not invoked — group is flattened, not executed)        |
 
 ---
 

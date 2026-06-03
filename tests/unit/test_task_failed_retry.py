@@ -197,7 +197,7 @@ class TestRetryBehavior:
                 "run-001", "test-dag", "task-1"
             )
             # 2 failed attempts + 1 success = 3 total
-            assert ctx.current_attempt == 3
+            assert ctx.attempt_number == 3
             assert ctx.attempts[0].state == AttemptStatus.FAILED
             assert ctx.attempts[1].state == AttemptStatus.FAILED
             assert ctx.attempts[2].state == AttemptStatus.SUCCESS
@@ -239,7 +239,7 @@ class TestTaskFailedSkipsRetry:
                 "run-001", "test-dag", "task-1"
             )
             # Only 1 attempt — did NOT retry
-            assert ctx.current_attempt == 1
+            assert ctx.attempt_number == 1
             assert ctx.attempts[0].state == AttemptStatus.FAILED
             assert "Database schema does not exist" in ctx.attempts[0].error
 
@@ -276,7 +276,7 @@ class TestTaskFailedSkipsRetry:
                 "run-001", "test-dag", "task-1"
             )
             # 2 transient failures (retried) + 1 permanent failure (stopped)
-            assert ctx.current_attempt == 3
+            assert ctx.attempt_number == 3
             assert ctx.attempts[0].state == AttemptStatus.FAILED
             assert "Transient error" in ctx.attempts[0].error
             assert ctx.attempts[1].state == AttemptStatus.FAILED
@@ -315,7 +315,7 @@ class TestTaskFailedSkipsRetry:
             ctx = await metadata.get_task_context(
                 "run-001", "test-dag", "task-1"
             )
-            assert ctx.current_attempt == 1
+            assert ctx.attempt_number == 1
 
         asyncio.run(_verify())
 
@@ -353,7 +353,7 @@ class TestTaskSkipped:
                 "run-001", "test-dag", "task-1"
             )
             # Only 1 attempt — did NOT retry
-            assert ctx.current_attempt == 1
+            assert ctx.attempt_number == 1
             assert ctx.attempts[0].state == AttemptStatus.SKIPPED
 
         asyncio.run(_verify())
@@ -389,7 +389,7 @@ class TestTaskSkipped:
                 "run-001", "test-dag", "task-1"
             )
             # 1 transient failure (retried) + 1 skip
-            assert ctx.current_attempt == 2
+            assert ctx.attempt_number == 2
             assert ctx.attempts[0].state == AttemptStatus.FAILED
             assert "Network timeout" in ctx.attempts[0].error
             assert ctx.attempts[1].state == AttemptStatus.SKIPPED
@@ -401,7 +401,7 @@ class TestTaskSkipped:
         from beacon.callback import OnTaskEvent
 
         worker = Worker(metadata, max_concurrent=5)
-        alert_dir = str(metadata.base / "alerts")
+        alert_dir = str(metadata.base_path / "alerts")
 
         task_ctx = _make_ctx(
             "skip-task",

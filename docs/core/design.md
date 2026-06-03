@@ -17,14 +17,17 @@ that need production-grade orchestration without the operational complexity.
    definitions pure configuration.
 
 3. **Simple path must be trivial** — A data engineer writes a Python function,
-   references it via `uses: py`, and it runs. No operator inheritance, no hook
-   composition, no provider installation.
+   references it via `uses: py`, and it runs. No operator inheritance, no
+   callback composition, no provider installation.
 
 4. **Scalable by default** — The architecture supports 10,000+ deployed DAGs
    through stateless workers, append-only logging, and lightweight DAG parsing.
 
 5. **Executor-agnostic** — TaskContext is serializable. The same task runs on
    local process, Docker, Kubernetes, AWS Batch, or Cloud Batch without code changes.
+
+6. **DAGs are reusable templates** — A DAG defines *what to do*; a Deployment
+   defines *how/when to do it* (params, schedule, env). One DAG → many Deployments.
 
 ---
 
@@ -34,13 +37,16 @@ that need production-grade orchestration without the operational complexity.
 User --> Client (CLI / SDK / YAML)
            |
            v
-      API Server (FastAPI) ──────────> Metadata Store (Sqlite / Postgres)
+      API Server (FastAPI) ──────────> Metadata Store (Json / Sqlite / Postgres)
            |                              ^       ^
            v                              |       |
       Scheduler ── enqueue ──> Queue ─────┘       |
                                  |                |
                                  v                |
-                            Executor ─────────────┘
+                              Worker ─────────────┘
+                                 |
+                                 v
+                            Executor
                          (Local / Docker / K8s / Batch)
                                  |
                                  v
@@ -57,7 +63,37 @@ User --> Client (CLI / SDK / YAML)
 | Sensor handling     | Poke loop occupies worker slot or deferred | Async sleep, no slot waste             |
 | Task context        | XCom (cross-task data shuttle)             | TaskContext (per-task, serializable)   |
 | Remote execution    | KubernetesExecutor + sidecar complexity    | Executor reads TaskContext from store  |
+| DAG reuse           | One file = one DAG = one schedule          | One DAG, N Deployments (params, cron)  |
 | Scaling to 10k DAGs | Requires multiple schedulers + DB tuning   | Stateless scheduler + queue            |
+
+---
+
+## DAG vs Deployment (Reuse Model)
+
+The core abstraction that distinguishes Beacon from Airflow:
+
+```text
+Dag ──── reusable template (defines tasks + params schema)
+  │
+  └── Deployment 1 ── binds Dag to: cron="0 2 * * *", params={source: postgres}
+  │
+  └── Deployment 2 ── binds Dag to: cron="0 * * * *", params={source: mysql}
+  │
+  └── Deployment 3 ── manual-only,  params={source: snowflake}
+```
+
+A single `Dag` template (e.g., `extract-load-table`) can have many `Deployment`s,
+each with its own:
+
+- Identity (`Deployment.id` shown in the UI)
+- Schedule (`cron`, `start_date`, `end_date`, `timezone`, `catch_up`)
+- Runtime params (values for `Dag.params`)
+- Stage variables (`variables_ref` → which stage of `variables.yml`)
+- Version pin (`dag_version` — None = latest)
+- Owners, labels, enabled flag
+
+This eliminates Airflow's anti-pattern of duplicating DAG files just to change
+a schedule or a source name.
 
 ---
 
@@ -102,14 +138,36 @@ class MyPlugin(BasePlugin):
 
 No inheritance chains. No mixin layers. One class, one method.
 
+### Plugin Error Signalling
+
+Plugins control retry behavior by which exception they raise:
+
+| Raises | Behavior | Use Case |
+|---|---|---|
+| Any `Exception` | Retry up to `retries`, then `FAILED` | Transient errors (network timeout) |
+| `TaskFailed` | Immediately `FAILED` — skip retries | Permanent errors (table missing) |
+| `TaskSkipped` | Mark `SKIPPED` — skip retries | Nothing to do (empty partition) |
+
+```python
+from beacon.errors import TaskFailed, TaskSkipped
+
+async def execute(self, context: Context) -> dict:
+    if not await self.source_exists():
+        raise TaskFailed("Source does not exist, no point retrying")
+    rows = await self.fetch()
+    if not rows:
+        raise TaskSkipped("No new data this run")
+    return {"rows": len(rows)}
+```
+
 ---
 
-## Hook System (Callbacks)
+## Callback System
 
 ### Unified with Plugin Registry
 
-Hooks use the **same resolution mechanism** as `uses`. A hook is just a plugin
-that executes on an event rather than as a DAG step.
+Callbacks use the **same resolution mechanism** as `uses`. A callback is just
+a class that runs on a lifecycle event rather than as a DAG step.
 
 ```yaml
 # YAML
@@ -123,12 +181,12 @@ callbacks:
 
 ```python
 # Python
-from beacon import OnEvent
+from beacon import OnDagEvent
 from beacon.providers.msteam.callback import MsTeamCallback
 
 dag = Dag(
     callbacks=[
-        OnEvent(
+        OnDagEvent(
             on_event="failure",
             hook=MsTeamCallback,  # or string "msteam-adaptive-card"
             inputs={"webhook_url": "https://..."},
@@ -137,30 +195,42 @@ dag = Dag(
 )
 ```
 
-**Hook resolution:**
+**Callback resolution:**
 
 ```text
-hook: "msteam-adaptive-card"              --> HOOKS_REGISTRY["msteam-adaptive-card"]
-hook: "my-org/callback-plugin@1.1.0"      --> external hook plugin
-hook: MsTeamCallbackPlugin                --> direct class reference (Python only)
+hook: "msteam-adaptive-card"              --> CALLBACKS_REGISTRY["msteam-adaptive-card"]
+hook: "my-org/callback-plugin@1.1.0"      --> external callback plugin
+hook: MsTeamCallback                      --> direct class reference (Python only)
 ```
 
-### Hook Plugin Contract
+### Callback Contract
 
 ```python
 from abc import ABC
-from typing import ClassVar
-from beacon.core import Templater
+from typing import ClassVar, Any
+from beacon import Callback
 
-class BaseHookPlugin(Templater, ABC, metaclass=HookPluginMeta):
-    hook_name: ClassVar[str] = "base"
+class MyCallback(Callback):
+    hook_name: ClassVar[str] = "my-callback"
 
-    async def notify(self, task_ctx: TaskContext, event: str) -> None:
-        raise NotImplementedError
+    def __init__(self, webhook_url: str) -> None:
+        self.webhook_url = webhook_url
+
+    async def notify(self, event: str, data: dict[str, Any]) -> None:
+        ...
 ```
 
 Same pattern as `BasePlugin` but with `notify()` instead of `execute()`.
 Same registry. Same version pinning. Same resolution.
+
+### Event Types
+
+| Event Owner | Events |
+|---|---|
+| `OnTaskEvent` | `start`, `success`, `failure`, `retry`, `skipped` |
+| `OnDagEvent` | `start`, `success`, `failure`, `finished` |
+
+`finished` fires on any DAG terminal state (success or failure).
 
 ---
 
@@ -198,7 +268,7 @@ class TaskContext(BaseModel):
     data_interval_end: datetime
 
     # Inputs (fully resolved before execution)
-    params: dict[str, Any]       # DAG params (Jinja-rendered with vars)
+    params: dict[str, Any]       # Deployment params (Jinja-rendered with vars)
     inputs: dict[str, Any]       # Task inputs (Jinja-rendered with params)
     plugin_name: str             # Which plugin to run
 
@@ -211,8 +281,16 @@ class TaskContext(BaseModel):
     # Attempt history (one per try, including retries)
     attempts: list[Attempt]
 
+    # Upstream outputs (read-only, populated by worker)
+    upstream_outputs: dict[str, dict[str, Any]]
+
     # Outputs (written after success)
     outputs: dict[str, Any]
+
+    @property
+    def attempt_number(self) -> int:
+        """Number of the most recent attempt (1-based). 0 if not started."""
+        return len(self.attempts)
 ```
 
 ### How TaskContext Enables Remote Execution
@@ -222,17 +300,17 @@ class TaskContext(BaseModel):
 │ Scheduler                                                        │
 │   1. Build TaskContext (resolve inputs, set plugin_name)         │
 │   2. Serialize TaskContext → Metadata Store (JSON)               │
-│   3. Enqueue message: {run_id, task_id} → Queue                 │
+│   3. Enqueue message: {run_id, dag_id, task_id} → Queue          │
 └──────────────────────────────────────────────────────────────────┘
                               │
                               v
 ┌──────────────────────────────────────────────────────────────────┐
-│ Executor (any type: local, docker, k8s, aws batch)               │
+│ Worker → Executor (any type: local, docker, k8s, aws batch)      │
 │   1. Receive message from Queue                                  │
-│   2. Read TaskContext from Metadata Store                         │
+│   2. Read TaskContext from Metadata Store                        │
 │   3. Resolve plugin from plugin_name                             │
-│   4. Build Context dict (lightweight, for plugin.execute())      │
-│   5. Call task_ctx.start_attempt(executor="k8s", ref="pod-xyz")  │
+│   4. Call task_ctx.start_attempt(executor="k8s", ref="pod-xyz")  │
+│   5. Build Context dict (lightweight, for plugin.execute())      │
 │   6. Run plugin.execute(context)                                 │
 │   7. Call task_ctx.finish_attempt(state, error, outputs)         │
 │   8. Write updated TaskContext back to Metadata Store            │
@@ -264,8 +342,9 @@ This is what makes K8s/Docker/Batch execution work without mounting DAG volumes.
 │    │               │                                                    │
 │    │               └──> RUNNING ─── Executor picked up, plugin running  │
 │    │                       │                                            │
-│    │                       ├──> SUCCESS ──── (terminal)                  │
-│    │                       ├──> FAILED ───── (terminal, no retries left) │
+│    │                       ├──> SUCCESS ────── (terminal)                │
+│    │                       ├──> FAILED ─────── (terminal, no retries)    │
+│    │                       ├──> SKIPPED ────── (terminal, TaskSkipped)   │
 │    │                       └──> UP_FOR_RETRY ── attempt failed           │
 │    │                               │             but retries remain      │
 │    │                               └──> QUEUED ─── (retry loop)          │
@@ -286,13 +365,14 @@ This is what makes K8s/Docker/Batch execution work without mounting DAG volumes.
 | `none`          | `removed`           | DAG edit during run                      |
 | `scheduled`     | `queued`            | Scheduler: enqueue to queue              |
 | `scheduled`     | `removed`           | DAG edit during run                      |
-| `queued`        | `running`           | Executor: picks from queue               |
+| `queued`        | `running`           | Worker: picks from queue                 |
 | `queued`        | `removed`           | DAG edit during run                      |
-| `running`       | `success`           | Executor: plugin completed               |
-| `running`       | `failed`            | Executor: no retries left                |
-| `running`       | `up_for_retry`      | Executor: attempt failed, retries remain |
+| `running`       | `success`           | Plugin completed                         |
+| `running`       | `failed`            | Plugin raised; no retries left           |
+| `running`       | `skipped`           | Plugin raised `TaskSkipped`              |
+| `running`       | `up_for_retry`      | Plugin raised; retries remain            |
 | `running`       | `removed`           | DAG edit during run                      |
-| `up_for_retry`  | `queued`            | Scheduler: after retry delay             |
+| `up_for_retry`  | `queued`            | Worker: after retry delay                |
 | `up_for_retry`  | `failed`            | Manual mark-failed or system limit       |
 | `up_for_retry`  | `removed`           | DAG edit during run                      |
 
@@ -303,11 +383,11 @@ This is what makes K8s/Docker/Batch execution work without mounting DAG volumes.
 | `none`            | —         | Task exists in metadata, waiting for scheduler evaluation |
 | `scheduled`       | Scheduler | Verified trigger rule + upstream states → ready           |
 | `queued`          | Scheduler | Wrote message to queue. TaskContext in metadata store     |
-| `running`         | Executor  | Read TaskContext → start_attempt() → plugin.execute()     |
-| `success`         | Executor  | finish_attempt(SUCCESS) → write outputs → update metadata |
-| `failed`          | Executor  | finish_attempt(FAILED) → write error → update metadata    |
-| `up_for_retry`    | Executor  | finish_attempt(FAILED) → schedule re-queue after delay    |
-| `skipped`         | Scheduler | Trigger rule evaluated to skip → no execution             |
+| `running`         | Worker    | Read TaskContext → start_attempt() → plugin.execute()     |
+| `success`         | Worker    | finish_attempt(SUCCESS) → write outputs → update metadata |
+| `failed`          | Worker    | finish_attempt(FAILED) → write error → update metadata    |
+| `skipped`         | Worker    | finish_attempt(SKIPPED) — TaskSkipped from plugin         |
+| `up_for_retry`    | Worker    | finish_attempt(FAILED) → schedule re-queue after delay    |
 | `upstream_failed` | Scheduler | Upstream task in terminal failed state                    |
 | `removed`         | Scheduler | DAG version changed mid-run, task no longer exists        |
 
@@ -321,7 +401,7 @@ within the TaskContext:
 ```python
 class Attempt(BaseModel):
     attempt_number: int       # 1-based
-    state: AttemptStatus      # running | success | failed | timed_out
+    state: AttemptStatus      # running | success | failed | skipped | timed_out
     started_at: datetime
     ended_at: datetime
     duration_sec: float
@@ -369,15 +449,15 @@ class BaseExecutor(ABC):
 ┌─────────────────────────────────────────────────────────────────┐
 │  Worker Process (runs in beacon server)                          │
 │                                                                 │
-│  1. Dequeue message {run_id, task_id}                            │
+│  1. Dequeue message {run_id, dag_id, task_id}                    │
 │  2. Read TaskContext from metadata store                         │
-│  3. Call executor.run_task(task_ctx)                              │
+│  3. Call executor.run_task(task_ctx)                             │
 │     └──> KubernetesExecutor:                                     │
-│          a. Create Pod spec with plugin image + TaskContext env   │
-│          b. Submit Pod to K8s API                                 │
+│          a. Create Pod spec with plugin image + TaskContext env  │
+│          b. Submit Pod to K8s API                                │
 │          c. Poll Pod status (async, no slot waste)               │
-│          d. On completion: read logs, update TaskContext          │
-│  4. Write updated TaskContext to metadata store                   │
+│          d. On completion: read logs, update TaskContext         │
+│  4. Write updated TaskContext to metadata store                  │
 │  5. Report final state to scheduler                              │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
@@ -393,6 +473,46 @@ The container runs a minimal beacon runner:
 # Inside container
 beacon-runner execute --from-env  # reads BEACON_TASK_CONTEXT, runs plugin, writes result
 ```
+
+---
+
+## Metadata Store
+
+### Protocol-Based (Pluggable)
+
+The Worker, Scheduler, and API Server depend on `MetadataProtocol` — not a
+concrete class. Any store implementing the protocol works.
+
+```python
+class MetadataProtocol(Protocol):
+    async def create_dag_run(...) -> None: ...
+    async def get_dag_run(run_id, dag_id) -> dict | None: ...
+    async def update_dag_run_state(run_id, dag_id, state) -> None: ...
+    async def put_task_context(run_id, dag_id, task_id, ctx) -> None: ...
+    async def get_task_context(run_id, dag_id, task_id) -> TaskContext | None: ...
+    async def set_task_state(run_id, dag_id, task_id, state) -> None: ...
+    async def get_task_state(run_id, dag_id, task_id) -> TaskState | None: ...
+```
+
+### Implementations
+
+| Store | Persistence | Use Case |
+|-------|-------------|----------|
+| `JsonMetadata` | Sharded JSON files | Default, dev → 1000 DAGs |
+| `SqliteMetadata` | Local SQLite | Single-node production (pending) |
+| `PostgresMetadata` | Postgres | Multi-node production (pending) |
+
+### JsonMetadata Performance
+
+Optimized for 1000+ DAG workloads without an external database:
+
+- **Sharded by `dag_id`** — `{base}/{dag_runs|task_contexts|task_states}/{dag_id}/...`
+  keeps each directory small (no flat 100k-file dirs)
+- **Async I/O** via `asyncio.to_thread` — file reads/writes don't block the event loop
+- **Atomic writes** — temp file + `os.replace` prevents partial reads
+- **In-memory cache** for task states (scheduler hot path)
+- **Bulk queries** — `get_all_task_states(run_id, dag_id)` for dependency evaluation
+- **Cache eviction** — `evict_run_from_cache()` frees memory when runs complete
 
 ---
 
@@ -467,20 +587,22 @@ Executor (Local / Docker / K8s / Batch)
 │ Phase 1: Deploy                                                             │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
-│  CLI: beacon deploy hello-world-workflow \                                  │
-│         --dag hello-world \                                                 │
-│         --schedule "0 0 * * *" \                                            │
-│         --variables variables.yml                                           │
+│  CLI: beacon deploy daily-customers-from-postgres \                         │
+│         --dag extract-load-table \                                          │
+│         --cron "0 2 * * *" \                                                │
+│         --params source=postgres target=customers \                         │
+│         --variables-ref prod                                                │
 │                                                                             │
-│  1. Parse DAG from bundle (YAML/Python)                                     │
-│  2. Resolve variables.yml → merge stage vars into Jinja context             │
+│  1. Parse DAG from bundle (YAML/Python) — only if not already deployed      │
+│  2. Validate Deployment.dag_id resolves to a known Dag                      │
 │  3. Validate DAG structure (plugins exist, dependencies are acyclic)        │
-│  4. Serialize DAG + schedule → store in Metadata                            │
-│  5. Tag with bundle version (content hash / commit SHA)                     │
+│  4. Serialize Dag + Deployment → store in Metadata                          │
+│  5. Tag Dag with bundle version (content hash / commit SHA)                 │
 │                                                                             │
 │  Metadata written:                                                          │
 │    - DagRecord(id, version, serialized_dag, created_at)                     │
-│    - ScheduleRecord(id, dag_id, dag_version, cron, timezone, params, vars)  │
+│    - DeploymentRecord(id, dag_id, dag_version, cron, timezone,              │
+│                       params, variables_ref, start_date, end_date)          │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
                                     │
@@ -490,16 +612,17 @@ Executor (Local / Docker / K8s / Batch)
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
 │  Scheduler loop (every heartbeat):                                          │
-│    1. Query ScheduleRecords where next_run <= now                           │
-│    2. For each due schedule:                                                │
+│    1. Query DeploymentRecords where enabled=True and next_run <= now        │
+│    2. For each due deployment:                                              │
 │       a. Compute logical_date, data_interval_start, data_interval_end       │
-│       b. Create DagRunRecord(run_id, dag_id, dag_version, state="running")  │
-│       c. For each action in DAG: build TaskContext → store in metadata      │
-│       d. TaskContext.attempts = [] (empty, no execution yet)                │
-│       e. Task state = NONE                                                  │
+│       b. Resolve vars() against variables_ref stage → final params          │
+│       c. Create DagRunRecord(run_id, dag_id, deployment_id, dag_version)    │
+│       d. For each action in DAG: build TaskContext → store in metadata      │
+│       e. TaskContext.attempts = [] (empty, no execution yet)                │
+│       f. Task state = NONE                                                  │
 │    3. Evaluate task dependencies:                                           │
 │       - Tasks with no upstream / all upstream SUCCESS → SCHEDULED → QUEUED  │
-│       - Enqueue {run_id, task_id} message to Queue                          │
+│       - Enqueue {run_id, dag_id, task_id} message to Queue                  │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
                                     │
@@ -508,20 +631,22 @@ Executor (Local / Docker / K8s / Batch)
 │ Phase 3: Task Execution                                                     │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
-│  Worker dequeues {run_id, task_id}:                                         │
+│  Worker dequeues {run_id, dag_id, task_id}:                                 │
 │    1. Read TaskContext from metadata store                                  │
-│    2. Set task state → RUNNING                                              │
-│    3. Fire on_event: start callbacks                                        │
-│    4. Dispatch to executor: executor.run_task(task_ctx)                     │
+│    2. Resolve upstream_outputs from declared upstreams                      │
+│    3. Set task state → RUNNING                                              │
+│    4. Fire on_event: start callbacks                                        │
+│    5. Dispatch to executor: executor.run_task(task_ctx)                     │
 │       - Executor: start_attempt(executor_type, executor_ref)                │
 │       - Executor: build Context dict from TaskContext                       │
 │       - Executor: plugin.execute(context)                                   │
 │       - Executor: finish_attempt(state, error, outputs)                     │
-│    5. Write updated TaskContext to metadata store                            │
-│    6. Evaluate result:                                                      │
-│       - SUCCESS → state = SUCCESS, fire success callbacks                   │
-│       - FAILED + retries left → state = UP_FOR_RETRY, schedule re-queue    │
-│       - FAILED + no retries → state = FAILED, fire failure callbacks        │
+│    6. Write updated TaskContext to metadata store                           │
+│    7. Evaluate result:                                                      │
+│       - SUCCESS  → state=SUCCESS,  fire success callbacks                   │
+│       - SKIPPED  → state=SKIPPED,  fire skipped callbacks                   │
+│       - FAILED + retries left → state=UP_FOR_RETRY, schedule re-queue       │
+│       - FAILED + no retries   → state=FAILED, fire failure callbacks        │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
                                     │
@@ -532,11 +657,12 @@ Executor (Local / Docker / K8s / Batch)
 │                                                                             │
 │  After each task reaches terminal state:                                    │
 │    1. Scheduler re-evaluates downstream tasks                               │
-│       - Downstream with all deps met → SCHEDULED → QUEUED                  │
+│       - Downstream with all deps met → SCHEDULED → QUEUED                   │
 │       - Downstream with upstream failed → UPSTREAM_FAILED                   │
 │    2. When all tasks terminal:                                              │
 │       - All SUCCESS → DagRun SUCCESS → fire dag on_event: success           │
 │       - Any FAILED → DagRun FAILED → fire dag on_event: failure             │
+│       - Either way → fire dag on_event: finished                            │
 │    3. Logs available via API:                                               │
 │       GET /dags/{dag_id}/runs/{run_id}/tasks/{task_id}/logs?attempt=N       │
 │                                                                             │
@@ -565,21 +691,25 @@ Attempt 3:
   TaskContext.outputs = {result: ...}
 ```
 
+If the plugin raises `TaskFailed` instead of a generic exception, retries are
+skipped and the task transitions directly to `FAILED`.
+
 ---
 
 ## Templating
 
 ### Jinja for Variable Substitution Only
 
-Beacon uses Jinja2 for **value interpolation**, not control flow:
+Beacon uses Jinja2 for **value interpolation**, not control flow.
 
 Layer of macros:
 
-- `vars`: global variables from `.global_vars.yml` merged with stage variables
-- `params`: DAG parameters passed at runtime
+- `vars`: stage variables loaded from `variables.yml`, scoped per deployment
+- `params`: Deployment params passed at trigger time
+- `outputs`: upstream task outputs (resolved at execution time)
 
 ```text
-Resolution order: `vars` → `params` → `inputs`
+Resolution order: vars → params → outputs → inputs
 ```
 
 ```yaml
@@ -587,21 +717,25 @@ Resolution order: `vars` → `params` → `inputs`
 inputs:
   source: "{{ params.source_system }}"
   path: "{{ params.base_path }}/{{ params.date }}"
+  bucket: "{{ vars('gcs_bucket') }}"
+  upstream_count: "{{ outputs.extract.row_count }}"
 
 # NOT supported in DAG definition (by design)
-{% for item in items %}  # No.
-{% if env == 'prod' %}   # No.
+{% for item in items %}  # No control flow
+{% if env == 'prod' %}   # No conditionals
 ```
 
 **Rationale:** Control flow in DAG definitions creates unpredictable graph shapes
 that cannot be statically validated, versioned, or displayed in a UI before execution.
+
+See [`templating.md`](./templating.md) for the full rendering pipeline.
 
 ### Dynamic Tasks (for-each)
 
 When you need fan-out, use a first-class `for_each` field — not Jinja loops:
 
 ```yaml
-tasks:
+actions:
   - id: "process-{{ item }}"
     type: task
     uses: py
@@ -623,28 +757,30 @@ tasks:
 ## Variable Resolution Timeline
 
 ```text
-Deploy time:                    Trigger time:               Execute time:
-─────────────                   ──────────────              ─────────────
-variables.yml parsed            vars() resolved             Plugin receives
-  │                               │                         final values
-  v                               v                         from Context
-stages:                         Jinja renders               (already concrete)
-  prod:                         schedule.params
-    source_system: x            with vars context
-                                  │
-                                  v
-                                TaskContext.params = {
-                                  source_system: "x"  ← was "{{ vars('source_system') }}"
-                                }
-                                TaskContext.inputs = {
-                                  py_file: "./process.py"
-                                  params: {source_system: "x"}  ← was "{{ params.source_system }}"
-                                }
+Deploy time:                Trigger time:               Execute time:
+─────────────               ──────────────              ─────────────
+variables.yml parsed        vars() resolved             Plugin receives
+  │                           │                         final concrete
+  v                           v                         values from
+stages:                     Jinja renders               Context (no
+  prod:                     deployment.params           Jinja rendering)
+    source_system: x        with vars(prod stage)
+                              │
+                              v
+                            TaskContext.params = {
+                              source_system: "x"  ← was "{{ vars('source_system') }}"
+                            }
+                            TaskContext.inputs = {
+                              py_file: "./process.py"
+                              params: {source_system: "x"}  ← was "{{ params.source_system }}"
+                            }
 ```
 
 **Two-pass rendering:**
-1. **Trigger time** — `vars()` expressions resolved against variable store → becomes `params`
-2. **Pre-execute (in scheduler)** — `params.*` resolved against TaskContext.params → becomes `inputs`
+1. **Trigger time** — `vars()` expressions resolved against the deployment's
+   `variables_ref` stage → becomes `params`
+2. **Pre-execute (in scheduler)** — `params.*` resolved against TaskContext.params
+   → becomes `inputs`
 
 By execution time, TaskContext.inputs contains **fully resolved concrete values**.
 The executor and plugin never do Jinja rendering.
@@ -658,12 +794,13 @@ Plugin ─── defines execution logic (reusable, versioned)
   │
   v
 Action ─── references a plugin via `uses`, provides `inputs`
-  │         types: Task, Sensor, Branch, ForEach (future)
+  │         types: Task, Sensor, Branch, ShortCircuit, Group, ForEach (future)
   v
-Dag ──── declares actions + dependencies + params + callbacks
+Dag ──── reusable template: actions + dependencies + params schema + callbacks
   │
   v
-Schedule ── binds a Dag to a cron + timezone + variables
+Deployment ── binds a Dag to: cron + timezone + params values + variables_ref
+              many Deployments can reference one Dag
 ```
 
 ### Action Types
@@ -673,11 +810,13 @@ Schedule ── binds a Dag to a cron + timezone + variables
 | `task`         | Execute a unit of work | Run to completion               |
 | `sensor`       | Wait for a condition   | Async poll with sleep           |
 | `branch`       | Choose downstream path | Evaluate condition, return path |
-| `foreach_task` | Fan-out over a list    | Spawn N task instances          |
+| `short_circuit`| Skip all downstream    | Evaluate boolean, skip if false |
+| `group`        | Bundle nested actions  | Container, not a runtime unit   |
+| `foreach_task` | Fan-out over a list    | Spawn N task instances (future) |
 
-All four share `BaseAction` and resolve plugins the same way.
-All four execute via `async def execute()`.
-All four use TaskContext for state persistence.
+All share `BaseAction` and resolve plugins the same way.
+All execute via `async def execute()`.
+All use TaskContext for state persistence.
 
 ---
 
@@ -707,6 +846,7 @@ Task execution:
                                              v
                                     ┌──────────────────┐
                                     │   Web UI          │
+                                    │   - Deployments   │
                                     │   - DAG graph     │
                                     │   - Task states   │
                                     │   - Log viewer    │
@@ -720,6 +860,10 @@ Each retry attempt gets its own log. The UI shows attempt tabs with:
 - Error message + traceback (if failed)
 - Outputs (if success)
 
+**UI primary list is Deployments, not DAGs.** Users think in terms of
+"daily-customers-from-postgres" (a deployment), not the underlying reusable
+`extract-load-table` DAG. Click into a deployment to see its DAG graph and runs.
+
 ---
 
 ## Bundle & Production Deployment
@@ -730,17 +874,21 @@ A team's workflow repository follows this convention:
 
 ```text
 my-workflow-repo/
-├── dags/                    # DAG definitions
+├── dags/                    # DAG definitions (reusable templates)
 │   ├── etl_pipeline.yml
 │   ├── ml_training.py
 │   └── reports/
 │       └── daily_report.yml
+├── deployments/             # Deployments (per-environment, per-config)
+│   ├── customers-from-postgres.yml
+│   └── orders-from-mysql.yml
 ├── plugins/                 # Custom plugins (auto-registered)
 │   ├── gcs_extract.py
 │   └── bigquery_load.py
-└── scripts/                 # Python files called by `uses: py`
-    ├── transform.py
-    └── validate.py
+├── scripts/                 # Python files called by `uses: py`
+│   ├── transform.py
+│   └── validate.py
+└── variables.yml            # Stage variables (prod, dev, staging)
 ```
 
 ### GitBundle Sync Flow
@@ -765,7 +913,11 @@ my-workflow-repo/
 │  5. For each DAG file:                                           │
 │     - Parse → validate (plugins exist, no cycles)                │
 │     - Serialize → store DagRecord(id, version, serialized_dag)   │
-│  6. Old DAG versions preserved (running instances unaffected)    │
+│  6. bundle.discover_deployments()                                │
+│     - Find all .yml in ./deployments/                            │
+│     - Validate each Deployment.dag_id resolves to a known DAG    │
+│     - Store DeploymentRecord                                     │
+│  7. Old DAG versions preserved (running instances unaffected)    │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -798,7 +950,7 @@ Then reference it in a DAG:
 
 ```yaml
 # dags/etl.yml
-tasks:
+actions:
   - id: extract
     type: task
     uses: gcs-extract        # ← resolved from plugins/
@@ -815,7 +967,7 @@ For logic that doesn't need a reusable plugin, use the `py` plugin:
 
 ```yaml
 # dags/etl.yml
-tasks:
+actions:
   - id: transform
     type: task
     uses: py
@@ -857,7 +1009,7 @@ When a bundle changes:
 2. Reparse affected DAGs
 3. Store new serialized DAG with new version
 4. Running instances continue on their original version (TaskContext has `dag_version`)
-5. New runs use the new version
+5. New runs use the new version (unless a Deployment pins `dag_version`)
 
 This prevents the Airflow problem where editing a DAG file mid-run corrupts
 running task instances.
@@ -884,7 +1036,7 @@ implicit global state like Airflow's XCom.
 ### Usage in YAML
 
 ```yaml
-tasks:
+actions:
   - id: extract
     type: task
     uses: py
@@ -946,6 +1098,9 @@ def main():
 
 - **No DAG-level Jinja control flow** — Graph shape is static and inspectable.
 
+- **No DAG-Schedule coupling** — A DAG is a template; schedules live in Deployments.
+  Reuse a DAG N times with N different Deployments instead of duplicating files.
+
 - **No multi-tenant scheduler** — One scheduler instance per deployment.
   Scale horizontally by deploying separate beacon instances per team/domain.
 
@@ -963,13 +1118,17 @@ def main():
 | **0**  | Bundle plugin auto-discovery (`./plugins/`)           | ✅ Done   | Custom plugin deployment            |
 | **0**  | `load_context()` for user Python files                | ✅ Done   | Runtime access without coupling     |
 | **0**  | Task state machine with valid transitions             | ✅ Done   | Enforced lifecycle                  |
-| **1**  | Hook system with registry resolution (string + class) | ✅ Done   | Callback parity Python/YAML         |
+| **1**  | Callback system with registry resolution              | ✅ Done   | Callback parity Python/YAML         |
 | **1**  | Async worker with retry scheduling                    | ✅ Done   | Full lifecycle transitions          |
-| **1**  | Metadata store (JsonMetadata): TaskContext CRUD       | ✅ Done   | Persistence for remote executors    |
+| **1**  | `MetadataProtocol` + `JsonMetadata` (sharded)         | ✅ Done   | Pluggable persistence, 1000+ DAGs   |
+| **1**  | `TaskFailed` / `TaskSkipped` exception support        | ✅ Done   | Plugin-driven retry/skip control    |
+| **1**  | `Deployment` model (reusable DAG + per-env config)    | ✅ Done   | DAG reuse without duplication       |
 | **2**  | GitBundle sync (webhook + git pull)                   | Pending  | Production deployment               |
 | **2**  | DockerExecutor / KubernetesExecutor                   | Pending  | Remote execution                    |
 | **2**  | `foreach_task` action type                            | Pending  | Dynamic parallelism                 |
 | **2**  | Scheduler + metadata-based DAG versioning             | Pending  | Scale to 10k DAGs                   |
+| **2**  | API Server (FastAPI) + Deployment CRUD endpoints      | Pending  | Programmatic control plane          |
 | **3**  | Remote plugin registry (`org/name@version`)           | Pending  | Ecosystem growth                    |
-| **3**  | Web UI (DAG viewer + run history + log viewer)        | Pending  | Observability                       |
+| **3**  | Web UI (Deployments list + DAG viewer + log viewer)   | Pending  | Observability                       |
 | **3**  | BatchExecutor (AWS Batch / Cloud Batch)               | Pending  | Cloud-native execution              |
+| **3**  | `SqliteMetadata` / `PostgresMetadata`                 | Pending  | Production-grade persistence        |

@@ -11,13 +11,13 @@ def test_group():
 
     group = Group(
         id="test",
-        tasks=[
+        actions=[
             Task(id="start", uses="empty"),
             Group(
                 id="nested",
-                tasks=[Sensor(id="sensor", uses="empty")],
+                actions=[Sensor(id="sensor", uses="empty")],
             ),
         ],
     )
     assert group.id == "test"
-    assert len(group.tasks) == 2
+    assert len(group.actions) == 2

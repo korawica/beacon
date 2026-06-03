@@ -35,9 +35,6 @@ class _TaskMessage:
 
     task_ctx: TaskContext
     callbacks: list[OnTaskEvent] = field(default_factory=list)
-    retries: int = 0
-    retry_delay: int = 10
-    exponential_backoff: bool = True
     upstream_task_ids: list[str] = field(default_factory=list)
 
 
@@ -82,9 +79,6 @@ class Worker:
         msg = _TaskMessage(
             task_ctx=task_ctx,
             callbacks=callbacks or [],
-            retries=task_ctx.retries,
-            retry_delay=task_ctx.retry_delay,
-            exponential_backoff=task_ctx.exponential_backoff,
             upstream_task_ids=upstream_task_ids or [],
         )
         await self._queue.put(msg)
@@ -178,7 +172,7 @@ class Worker:
                     dag_id,
                     task_id,
                     delay,
-                    task_ctx.current_attempt,
+                    task_ctx.attempt_number,
                     task_ctx.retries + 1,
                 )
                 msg.task_ctx = task_ctx
@@ -199,7 +193,7 @@ class Worker:
                 "Task %s/%s failed after %d attempts",
                 dag_id,
                 task_id,
-                task_ctx.current_attempt,
+                task_ctx.attempt_number,
             )
 
     async def _schedule_retry(self, msg: _TaskMessage, delay: float) -> None:

@@ -34,7 +34,7 @@ def _reusable_etl_dag() -> Dag:
             Param(name="target_table", type="str", default=None),
             Param(name="columns", type="array", default=[]),
         ],
-        tasks=[
+        actions=[
             Task(
                 id="extract",
                 uses="empty",

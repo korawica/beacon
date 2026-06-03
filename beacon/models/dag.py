@@ -2,7 +2,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from .group import Action
+from .group import ActionType
 
 
 class Dag(BaseModel):
@@ -22,9 +22,9 @@ class Dag(BaseModel):
     params: list = Field(
         default_factory=list, description="A list of parameters"
     )
-    tasks: list[Action] = Field(
+    actions: list[ActionType] = Field(
         default_factory=list,
-        description="A list of task model(s)",
+        description="A list of action(s) (Task, Branch, Sensor, Group, ...)",
     )
     callbacks: list = Field(
         default_factory=list,

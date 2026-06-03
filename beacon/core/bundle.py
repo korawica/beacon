@@ -31,16 +31,7 @@ from typing import Any
 
 logger = logging.getLogger("beacon.bundle")
 
-BUNDLE_MEMORY_DAGS: dict = {}
-
-
-class BaseBundle:
-    """Base Bundle.
-
-    This bundle will be the default bundle for loaded data on memory.
-    """
-
-    def __init__(self): ...
+_bundle_dag_cache: dict = {}
 
 
 class LocalBundle:

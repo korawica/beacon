@@ -136,14 +136,14 @@ class TaskContext(BaseModel):
     )
 
     @property
-    def current_attempt(self) -> int:
-        """Current attempt number (1-based). 0 if not started."""
+    def attempt_number(self) -> int:
+        """Number of the most recent attempt (1-based). 0 if not started."""
         return len(self.attempts)
 
     @property
     def has_retries_left(self) -> bool:
         """Whether the task can still retry."""
-        return self.current_attempt <= self.retries
+        return self.attempt_number <= self.retries
 
     @property
     def last_attempt(self) -> Attempt | None:
@@ -155,14 +155,14 @@ class TaskContext(BaseModel):
         """Compute next retry delay with optional exponential backoff."""
         if not self.exponential_backoff:
             return float(self.retry_delay)
-        return float(self.retry_delay * (2 ** (self.current_attempt - 1)))
+        return float(self.retry_delay * (2 ** (self.attempt_number - 1)))
 
     def start_attempt(
         self, executor: str, executor_ref: str | None = None
     ) -> Attempt:
         """Create and append a new attempt. Called by the executor."""
         attempt = Attempt(
-            attempt_number=self.current_attempt + 1,
+            attempt_number=self.attempt_number + 1,
             state=AttemptStatus.RUNNING,
             started_at=datetime.now(),
             executor=executor,

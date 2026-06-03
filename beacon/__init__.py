@@ -3,7 +3,7 @@ from .core.context import Context
 from .core.plugin import PLUGINS_REGISTRY, BasePlugin, register_plugin
 from .core.templater import Templater
 from .core.trigger_rule import TriggerRule
-from .callback import OnEvent, OnTaskEvent, BaseHook
+from .callback import OnDagEvent, OnTaskEvent, Callback
 from .providers.standard.hooks import JsonFileHook
 from .models.dag import Dag
 from .models.deployment import Deployment

@@ -15,7 +15,7 @@ class TestPluginExistence:
         dag = Dag(
             id="test",
             owners=["de"],
-            tasks=[
+            actions=[
                 Task(id="t1", uses="py"),
             ],
         )
@@ -26,7 +26,7 @@ class TestPluginExistence:
         dag = Dag(
             id="test",
             owners=["de"],
-            tasks=[
+            actions=[
                 Task(id="t1", uses="nonexistent-plugin"),
             ],
         )
@@ -42,7 +42,7 @@ class TestPluginActionCompatibility:
         dag = Dag(
             id="test",
             owners=["de"],
-            tasks=[
+            actions=[
                 Branch(
                     id="b1", uses="by_hours", success=["t1"], failure=["t2"]
                 ),
@@ -58,7 +58,7 @@ class TestPluginActionCompatibility:
         dag = Dag(
             id="test",
             owners=["de"],
-            tasks=[
+            actions=[
                 Task(id="t1", uses="by_hours"),
             ],
         )
@@ -72,7 +72,7 @@ class TestPluginActionCompatibility:
         dag = Dag(
             id="test",
             owners=["de"],
-            tasks=[
+            actions=[
                 Task(id="t1", uses="py"),
             ],
         )
@@ -85,7 +85,7 @@ class TestGraphValidation:
         dag = Dag(
             id="test",
             owners=["de"],
-            tasks=[
+            actions=[
                 Task(id="t1", uses="empty", upstream=["nonexistent"]),
             ],
         )
@@ -98,7 +98,7 @@ class TestGraphValidation:
         dag = Dag(
             id="test",
             owners=["de"],
-            tasks=[
+            actions=[
                 Task(id="start", uses="empty"),
                 Task(id="process", uses="empty", upstream=["start"]),
                 Task(id="end", uses="empty", upstream=["process"]),
@@ -112,7 +112,7 @@ class TestGraphValidation:
         dag = Dag(
             id="test",
             owners=["de"],
-            tasks=[
+            actions=[
                 Task(id="a", uses="empty", upstream=["c"]),
                 Task(id="b", uses="empty", upstream=["a"]),
                 Task(id="c", uses="empty", upstream=["b"]),
@@ -132,7 +132,7 @@ class TestTemplateRendering:
             id="test",
             owners=["de"],
             params=[Param(name="source", type="str", default="default_src")],
-            tasks=[
+            actions=[
                 Task(
                     id="t1",
                     uses="py",
@@ -152,7 +152,7 @@ class TestTemplateRendering:
             id="test",
             owners=["de"],
             params=[Param(name="source", type="str", default="x")],
-            tasks=[
+            actions=[
                 Task(
                     id="t1",
                     uses="empty",
@@ -170,7 +170,7 @@ class TestTemplateRendering:
         dag = Dag(
             id="test",
             owners=["de"],
-            tasks=[
+            actions=[
                 Task(
                     id="t1",
                     uses="empty",
@@ -190,7 +190,7 @@ class TestDryRunOutput:
         dag = Dag(
             id="etl-pipeline",
             owners=["de"],
-            tasks=[
+            actions=[
                 Task(id="start", uses="empty"),
                 Task(
                     id="process",

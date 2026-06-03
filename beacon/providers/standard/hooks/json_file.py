@@ -9,12 +9,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, ClassVar
 
-from ....callback import BaseHook
+from ....callback import Callback
 
 logger = logging.getLogger("beacon.hook.json_file")
 
 
-class JsonFileHook(BaseHook):
+class JsonFileHook(Callback):
     """Writes alert JSON files to a local directory.
 
     Output: {alert_dir}/{dag_id}_{task_id}_{event}_{timestamp}.json
