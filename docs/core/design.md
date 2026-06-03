@@ -1084,6 +1084,248 @@ def main():
 
 ---
 
+## DAG User Journey (`Dag.run()` / `Dag.test()` / `Dag.dryrun()`)
+
+The `Dag` model provides three methods that form the developer workflow:
+
+```text
+dag = Dag(...)
+     │
+     ├── dag.dryrun()   → Validate structure + render templates (no execution)
+     │
+     ├── dag.test()     → Execute all tasks, report pass/fail per task (temp storage)
+     │
+     └── dag.run()      → Execute full DAG locally, persist state, return outputs
+```
+
+### `dag.dryrun(params=..., variables=...)`
+
+Pre-deployment validation. Checks plugins exist, graph is acyclic, and Jinja
+templates render correctly with the given params/variables. **No plugin code runs.**
+
+```python
+dag = Dag(id="etl", owners=["de"], actions=[...])
+result = dag.dryrun(params={"source": "postgres"}, variables={"bucket": "prod"})
+print(result.print())   # Shows resolved inputs per task
+assert result.is_valid  # Fails fast if misconfigured
+```
+
+### `dag.test(params=...)`
+
+Executes all tasks in a temporary metadata store. Reports pass/fail per task.
+Use this to verify plugins can be instantiated and produce outputs.
+
+```python
+result = dag.test(params={"source": "postgres"})
+assert result["passed"]  # All tasks succeeded
+print(result["tasks"])   # {"extract": {"state": "success", "outputs": {...}}, ...}
+```
+
+### `dag.run(params=..., metadata_path=...)`
+
+Full local execution with state persistence. Tasks run in topological order.
+Upstream outputs flow to downstream tasks. Returns run_id, states, and outputs.
+
+```python
+result = dag.run(params={"source": "postgres"})
+print(result["outputs"]["transform"])  # {"rows_processed": 1000}
+```
+
+---
+
+## Setup & Teardown Tasks (Action-Level)
+
+### Problem
+
+Many data pipelines need **resource provisioning** before tasks run and
+**resource cleanup** after tasks complete (regardless of success or failure):
+
+- **Provision a Spark/Dataproc cluster** → run tasks → **tear down cluster**
+- **Create a staging table** → load data → **drop staging table**
+- **Acquire a connection slot** → run queries → **release slot**
+
+### Design: `teardown` Field on Any Action
+
+Instead of DAG-level `setup`/`teardown` lists, Beacon uses an **action-level
+`teardown` field** — any task can declare itself as the teardown for another
+specific task. This is flexible and composable (like Airflow's `as_teardown()`).
+
+```yaml
+actions:
+  - id: create-cluster
+    type: task
+    uses: py
+    inputs:
+      py_file: ../scripts/cluster.py
+      py_function: create
+
+  - id: run-etl
+    type: task
+    uses: py
+    upstream: [create-cluster]
+    inputs:
+      py_file: ../scripts/etl.py
+      py_function: main
+      params:
+        cluster: "{{ outputs.create-cluster.endpoint }}"
+
+  - id: destroy-cluster
+    type: task
+    uses: py
+    teardown: create-cluster          # ← "I am the teardown for create-cluster"
+    inputs:
+      py_file: ../scripts/cluster.py
+      py_function: destroy
+      params:
+        cluster: "{{ outputs.create-cluster.endpoint }}"
+```
+
+### Semantics
+
+```text
+┌────────────────────────────────────────────────────────────────────┐
+│  Task: create-cluster (setup task — referenced by teardown)        │
+│    Runs first (no upstream).                                       │
+│    Outputs: { endpoint: "cluster-abc.internal:8080" }              │
+└───────────────────────────┬────────────────────────────────────────┘
+                            │
+                            v
+┌────────────────────────────────────────────────────────────────────┐
+│  Task: run-etl (normal task, upstream: [create-cluster])           │
+│    Uses cluster endpoint from outputs.                             │
+└───────────────────────────┬────────────────────────────────────────┘
+                            │ after ALL dependents of create-cluster
+                            │ reach terminal state (success OR failure)
+                            v
+┌────────────────────────────────────────────────────────────────────┐
+│  Task: destroy-cluster (teardown: create-cluster)                  │
+│    ALWAYS runs — even if run-etl failed.                           │
+│    Can access create-cluster outputs.                              │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+### Key Rules
+
+1. **`teardown: <task_id>`** — marks this task as teardown for that task.
+2. **The setup task is just a normal task** — no special field needed. It becomes
+   a "setup" implicitly because another task declares it as its teardown target.
+3. **Teardown always runs** — regardless of whether dependents of its setup task
+   succeeded or failed. It uses `trigger_rule: ALL_DONE` semantics implicitly.
+4. **Teardown runs last** — after ALL tasks that depend (directly or transitively)
+   on the setup task have reached terminal state.
+5. **Teardown can access setup outputs** — the setup task_id is added to its
+   `upstream_outputs` automatically so it can read provisioned resources.
+6. **Teardown failure is non-fatal** — logged as warning. The DagRun state
+   reflects the main task outcomes, not teardown failures.
+7. **Validated at dryrun** — the referenced task_id must exist in the DAG.
+   Self-reference is rejected.
+
+### Multiple Setup/Teardown Pairs
+
+You can have multiple independent setup/teardown pairs in the same DAG:
+
+```yaml
+actions:
+  - id: create-cluster
+    type: task
+    uses: py
+    inputs: { py_file: ./cluster.py, py_function: create }
+
+  - id: create-staging-table
+    type: task
+    uses: py
+    inputs: { py_file: ./staging.py, py_function: create }
+
+  - id: extract
+    type: task
+    uses: py
+    upstream: [create-cluster, create-staging-table]
+    inputs: { py_file: ./extract.py, py_function: main }
+
+  - id: transform
+    type: task
+    uses: py
+    upstream: [extract]
+    inputs: { py_file: ./transform.py, py_function: main }
+
+  # Teardowns — each cleans up its own setup
+  - id: destroy-cluster
+    type: task
+    uses: py
+    teardown: create-cluster
+    inputs: { py_file: ./cluster.py, py_function: destroy }
+
+  - id: drop-staging-table
+    type: task
+    uses: py
+    teardown: create-staging-table
+    inputs: { py_file: ./staging.py, py_function: drop }
+```
+
+### Python API
+
+```python
+from beacon import Dag, Task
+
+dag = Dag(
+    id="etl-with-cluster",
+    owners=["de"],
+    actions=[
+        Task(
+            id="create-cluster",
+            uses="py",
+            inputs={"py_file": "./cluster.py", "py_function": "create"},
+        ),
+        Task(
+            id="run-etl",
+            uses="py",
+            upstream=["create-cluster"],
+            inputs={"py_file": "./etl.py", "py_function": "main"},
+        ),
+        Task(
+            id="destroy-cluster",
+            uses="py",
+            teardown="create-cluster",
+            inputs={"py_file": "./cluster.py", "py_function": "destroy"},
+        ),
+    ],
+)
+
+# Dryrun validates the teardown reference exists
+result = dag.dryrun()
+assert result.is_valid
+```
+
+### Validation (in `dryrun`)
+
+The `dryrun()` function validates teardown references:
+
+- **Referenced task must exist** — `teardown: "nonexistent"` → error
+- **No self-reference** — `teardown: "self-id"` → error
+- Included alongside existing upstream reference validation (Check 3)
+
+### Comparison with Airflow
+
+| Aspect | Airflow | Beacon |
+|--------|---------|--------|
+| Syntax | `task.as_teardown(setups=setup_task)` | `teardown: "setup-task-id"` |
+| Scope | Task-level (decorator-like) | Action-level (field in model) |
+| Multiple pairs | Supported | Supported |
+| Always-run | `trigger_rule=ALL_DONE_SETUP_SUCCESS` | Implicit for teardown tasks |
+| Validation | Runtime error if setup missing | dryrun catches at parse time |
+
+### Implementation Plan
+
+| Step | Description | Verify |
+|------|-------------|--------|
+| 1. ✅ Add `teardown` field to `BaseAction` | Field accepted on all action types | Unit: Task(teardown="x") parses |
+| 2. ✅ Validate teardown ref in `dryrun()` | Catches missing/self references | Unit: dryrun errors for bad refs |
+| 3. Worker resolves teardown scheduling | Teardown runs after all dependents terminal | E2E: teardown runs after failure |
+| 4. Teardown accesses setup outputs | via upstream_outputs | E2E: reads cluster endpoint |
+| 5. Teardown failure is non-fatal | DagRun state ignores teardown failures | E2E: dag SUCCESS despite teardown fail |
+
+---
+
 ## What Beacon Does NOT Do (By Design)
 
 - **No unbounded cross-task data shuttle** — Upstream outputs are bounded (one dict
@@ -1123,6 +1365,8 @@ def main():
 | **1**  | `MetadataProtocol` + `JsonMetadata` (sharded)         | ✅ Done   | Pluggable persistence, 1000+ DAGs   |
 | **1**  | `TaskFailed` / `TaskSkipped` exception support        | ✅ Done   | Plugin-driven retry/skip control    |
 | **1**  | `Deployment` model (reusable DAG + per-env config)    | ✅ Done   | DAG reuse without duplication       |
+| **1**  | `Dag.run()` / `Dag.test()` / `Dag.dryrun()` methods  | ✅ Done   | Developer workflow (validate → test → run) |
+| **2**  | Setup & Teardown (`teardown` field + worker scheduling)| Pending  | Cluster/staging lifecycle           |
 | **2**  | GitBundle sync (webhook + git pull)                   | Pending  | Production deployment               |
 | **2**  | DockerExecutor / KubernetesExecutor                   | Pending  | Remote execution                    |
 | **2**  | `foreach_task` action type                            | Pending  | Dynamic parallelism                 |

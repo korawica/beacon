@@ -112,6 +112,7 @@ def dryrun(
     params: dict[str, Any] | None = None,
     variables: dict[str, Any] | None = None,
     logical_date: datetime | None = None,
+    cron: str | None = None,
 ) -> DryRunResult:
     """Validate and dry-run a DAG definition.
 
@@ -127,6 +128,8 @@ def dryrun(
         params: Runtime parameters to simulate.
         variables: Variables (from variables.yml) to simulate.
         logical_date: Simulated logical_date for rendering.
+        cron: Cron expression to compute data_interval_start/end from
+            logical_date. If None, intervals default to logical_date.
 
     Returns:
         DryRunResult with errors, warnings, and resolved task info.
@@ -135,6 +138,11 @@ def dryrun(
     variables = variables or {}
     logical_date = logical_date or datetime.now()
     result = DryRunResult(dag_id=dag.id)
+
+    # Compute data intervals from cron
+    data_interval_start, data_interval_end = _compute_data_interval(
+        cron, logical_date
+    )
 
     # Merge default params from DAG definition
     effective_params = {}
@@ -199,6 +207,29 @@ def dryrun(
                     )
                 )
 
+    # --- Check 3b: Teardown references exist ---
+    for task_id, action in task_map.items():
+        teardown_ref = getattr(action, "teardown", None)
+        if teardown_ref and teardown_ref not in all_ids:
+            result.errors.append(
+                DryRunIssue(
+                    task_id=task_id,
+                    category="graph",
+                    message=(
+                        f"Teardown references task {teardown_ref!r} "
+                        f"which does not exist in DAG."
+                    ),
+                )
+            )
+        if teardown_ref and teardown_ref == task_id:
+            result.errors.append(
+                DryRunIssue(
+                    task_id=task_id,
+                    category="graph",
+                    message="A task cannot be a teardown for itself.",
+                )
+            )
+
     # --- Check 4: Cycle detection ---
     cycle = _detect_cycle(task_map)
     if cycle:
@@ -226,7 +257,10 @@ def dryrun(
             effective_params,
             variables,
             logical_date,
+            data_interval_start,
+            data_interval_end,
             result,
+            dag.id,
             task_id,
         )
         result.resolved_tasks.append(
@@ -310,12 +344,35 @@ def _topological_sort(task_map: dict[str, Any]) -> list[str]:
     return order
 
 
+def _compute_data_interval(
+    cron: str | None, logical_date: datetime
+) -> tuple[datetime, datetime]:
+    """Compute data_interval_start and data_interval_end from cron.
+
+    If cron is provided, uses croniter to find the previous and next
+    boundaries. If not, both default to logical_date (no interval).
+    """
+    if cron is None:
+        return logical_date, logical_date
+
+    from croniter import croniter
+
+    # data_interval_start = the logical_date itself (previous fire time)
+    # data_interval_end = the next fire time after logical_date
+    cron_iter = croniter(cron, logical_date)
+    data_interval_end = cron_iter.get_next(datetime)
+    return logical_date, data_interval_end
+
+
 def _render_inputs(
     inputs: dict,
     params: dict,
     variables: dict,
     logical_date: datetime,
+    data_interval_start: datetime,
+    data_interval_end: datetime,
     result: DryRunResult,
+    dag_id: str,
     task_id: str,
 ) -> dict[str, Any]:
     """Best-effort Jinja rendering of task inputs."""
@@ -326,6 +383,17 @@ def _render_inputs(
     def vars_func(name: str) -> str:
         return variables.get(name, f"<unresolved: vars('{name}')>")
 
+    runtime_ctx = {
+        "run_id": f"dryrun-{dag_id}",
+        "dag_id": dag_id,
+        "task_id": task_id,
+        "run_date": logical_date,
+        "logical_date": logical_date,
+        "data_interval_start": data_interval_start,
+        "data_interval_end": data_interval_end,
+        "attempt_number": 1,
+    }
+
     for key, value in inputs.items():
         if isinstance(value, str) and "{{" in value:
             try:
@@ -334,7 +402,7 @@ def _render_inputs(
                     params=params,
                     vars=vars_func,
                     outputs={},  # no upstream outputs at dry-run
-                    runtime={"logical_date": logical_date},
+                    runtime=runtime_ctx,
                 )
                 rendered[key] = rendered_val
             except Exception as exc:
@@ -344,7 +412,15 @@ def _render_inputs(
                 rendered[key] = value
         elif isinstance(value, dict):
             rendered[key] = _render_inputs(
-                value, params, variables, logical_date, result, task_id
+                value,
+                params,
+                variables,
+                logical_date,
+                data_interval_start,
+                data_interval_end,
+                result,
+                dag_id,
+                task_id,
             )
         else:
             rendered[key] = value

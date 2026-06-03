@@ -94,6 +94,59 @@ class TestGraphValidation:
         assert result.errors[0].category == "graph"
         assert "does not exist" in result.errors[0].message
 
+    def test_teardown_references_nonexistent_task(self):
+        """Teardown referencing a task_id that doesn't exist in DAG → error."""
+        dag = Dag(
+            id="test",
+            owners=["de"],
+            actions=[
+                Task(id="run-etl", uses="empty"),
+                Task(
+                    id="destroy-cluster", uses="empty", teardown="nonexistent"
+                ),
+            ],
+        )
+        result = dryrun(dag)
+        assert not result.is_valid
+        assert any(
+            e.category == "graph" and "nonexistent" in e.message
+            for e in result.errors
+        )
+
+    def test_teardown_self_reference(self):
+        """A task cannot be a teardown for itself."""
+        dag = Dag(
+            id="test",
+            owners=["de"],
+            actions=[
+                Task(id="task1", uses="empty", teardown="task1"),
+            ],
+        )
+        result = dryrun(dag)
+        assert not result.is_valid
+        assert any(
+            "cannot be a teardown for itself" in e.message
+            for e in result.errors
+        )
+
+    def test_valid_teardown_reference(self):
+        """Teardown referencing an existing task_id → valid."""
+        dag = Dag(
+            id="test",
+            owners=["de"],
+            actions=[
+                Task(id="create-cluster", uses="empty"),
+                Task(id="run-etl", uses="empty", upstream=["create-cluster"]),
+                Task(
+                    id="destroy-cluster",
+                    uses="empty",
+                    teardown="create-cluster",
+                ),
+            ],
+        )
+        result = dryrun(dag)
+        assert result.is_valid
+
     def test_valid_graph(self):
         dag = Dag(
             id="test",
@@ -183,6 +236,59 @@ class TestTemplateRendering:
         result = dryrun(dag, variables={"bucket": "prod-bucket"})
         assert result.is_valid
         assert result.resolved_tasks[0].inputs["bucket"] == "prod-bucket"
+
+    def test_renders_data_interval_from_cron(self):
+        """When cron is provided, data_interval_start/end are computed and
+        available in runtime context for template rendering."""
+        dag = Dag(
+            id="test",
+            owners=["de"],
+            actions=[
+                Task(
+                    id="t1",
+                    uses="empty",
+                    inputs={
+                        "start": "{{ runtime.data_interval_start }}",
+                        "end": "{{ runtime.data_interval_end }}",
+                    },
+                ),
+            ],
+        )
+        from datetime import datetime
+
+        logical = datetime(2026, 6, 3, 2, 0, 0)
+        result = dryrun(dag, logical_date=logical, cron="0 2 * * *")
+        assert result.is_valid
+        t = result.resolved_tasks[0]
+        # With daily cron "0 2 * * *" and logical_date=2026-06-03 02:00,
+        # data_interval_start = logical_date, data_interval_end = next day 02:00
+        assert "2026-06-03" in t.inputs["start"]
+        assert "2026-06-04" in t.inputs["end"]
+
+    def test_renders_data_interval_without_cron(self):
+        """Without cron, data_interval_start/end both equal logical_date."""
+        dag = Dag(
+            id="test",
+            owners=["de"],
+            actions=[
+                Task(
+                    id="t1",
+                    uses="empty",
+                    inputs={
+                        "start": "{{ runtime.data_interval_start }}",
+                        "end": "{{ runtime.data_interval_end }}",
+                    },
+                ),
+            ],
+        )
+        from datetime import datetime
+
+        logical = datetime(2026, 6, 3, 2, 0, 0)
+        result = dryrun(dag, logical_date=logical)
+        assert result.is_valid
+        t = result.resolved_tasks[0]
+        # Both should be the same date when no cron
+        assert t.inputs["start"] == t.inputs["end"]
 
 
 class TestDryRunOutput:

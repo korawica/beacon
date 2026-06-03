@@ -45,6 +45,14 @@ class BaseAction(BaseModel):
         default_factory=list,
         description="A list of upstream task ID(s)",
     )
+    teardown: str | None = Field(
+        default=None,
+        description=(
+            "If set, marks this task as a teardown for the referenced task ID. "
+            "A teardown task always runs after all dependents of its setup task "
+            "have reached terminal state, regardless of success or failure."
+        ),
+    )
     trigger_rule: str = Field(
         default=TriggerRule.ALL_DONE,
         description="The trigger rule",
