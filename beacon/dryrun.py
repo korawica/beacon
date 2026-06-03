@@ -319,16 +319,16 @@ def _render_inputs(
     task_id: str,
 ) -> dict[str, Any]:
     """Best-effort Jinja rendering of task inputs."""
+    from jinja2 import Template
+
     rendered = {}
+
+    def vars_func(name: str) -> str:
+        return variables.get(name, f"<unresolved: vars('{name}')>")
 
     for key, value in inputs.items():
         if isinstance(value, str) and "{{" in value:
             try:
-                from jinja2 import Template
-
-                def vars_func(name: str) -> str:
-                    return variables.get(name, f"<unresolved: vars('{name}')>")
-
                 tmpl = Template(value)
                 rendered_val = tmpl.render(
                     params=params,

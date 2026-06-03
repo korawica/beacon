@@ -3,16 +3,11 @@
 Hooks are triggered on task/DAG lifecycle events. They use the same
 registry pattern as plugins — string resolution for YAML, class reference
 for Python.
-
-Built-in hook: JsonFileHook writes alert JSON files to a local directory.
 """
 
-import json
 import logging
 import threading
 from abc import ABC, abstractmethod
-from datetime import datetime
-from pathlib import Path
 from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, Field
@@ -39,30 +34,6 @@ class BaseHook(ABC):
     async def notify(self, event: str, data: dict[str, Any]) -> None:
         """Fire the hook with event data."""
         raise NotImplementedError
-
-
-class JsonFileHook(BaseHook):
-    """Writes alert JSON files to a local directory.
-
-    Output: {alert_dir}/{dag_id}_{task_id}_{event}_{timestamp}.json
-    """
-
-    hook_name: ClassVar[str] = "json-file"
-
-    def __init__(self, alert_dir: str = "./alerts") -> None:
-        self.alert_dir = Path(alert_dir)
-
-    async def notify(self, event: str, data: dict[str, Any]) -> None:
-        self.alert_dir.mkdir(parents=True, exist_ok=True)
-        dag_id = data.get("dag_id", "unknown")
-        task_id = data.get("task_id", "unknown")
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        filename = f"{dag_id}_{task_id}_{event}_{ts}.json"
-        payload = {"event": event, "timestamp": ts, **data}
-        (self.alert_dir / filename).write_text(
-            json.dumps(payload, indent=2, default=str)
-        )
-        logger.info("Alert written: %s", filename)
 
 
 def _resolve_hook(

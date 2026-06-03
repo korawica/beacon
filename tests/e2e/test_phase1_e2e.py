@@ -6,7 +6,8 @@ from datetime import datetime
 
 import pytest
 
-from beacon.callback import JsonFileHook, OnTaskEvent
+from beacon.callback import OnTaskEvent
+from beacon.providers.standard.hooks import JsonFileHook
 from beacon.core import TaskContext, TaskState
 from beacon.metadata.json_store import JsonMetadata
 from beacon.worker import Worker
