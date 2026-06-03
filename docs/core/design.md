@@ -1320,9 +1320,9 @@ The `dryrun()` function validates teardown references:
 |-------------------------------------------|---------------------------------------------|----------------------------------------|
 | 1. ✅ Add `teardown` field to `BaseAction` | Field accepted on all action types          | Unit: Task(teardown="x") parses        |
 | 2. ✅ Validate teardown ref in `dryrun()`  | Catches missing/self references             | Unit: dryrun errors for bad refs       |
-| 3. Worker resolves teardown scheduling    | Teardown runs after all dependents terminal | E2E: teardown runs after failure       |
-| 4. Teardown accesses setup outputs        | via upstream_outputs                        | E2E: reads cluster endpoint            |
-| 5. Teardown failure is non-fatal          | DagRun state ignores teardown failures      | E2E: dag SUCCESS despite teardown fail |
+| 3. ✅ Scheduler resolves teardown scheduling | Teardown runs after all dependents terminal | E2E: teardown runs after failure       |
+| 4. ✅ Teardown accesses setup outputs       | via upstream_outputs                        | E2E: reads cluster endpoint            |
+| 5. ✅ Teardown failure is non-fatal         | DagRun state ignores teardown failures      | E2E: dag SUCCESS despite teardown fail |
 
 ---
 
@@ -1365,12 +1365,14 @@ The `dryrun()` function validates teardown references:
 | **1**   | `MetadataProtocol` + `JsonMetadata` (sharded)           | ✅ Done   | Pluggable persistence, 1000+ DAGs          |
 | **1**   | `TaskFailed` / `TaskSkipped` exception support          | ✅ Done   | Plugin-driven retry/skip control           |
 | **1**   | `Deployment` model (reusable DAG + per-env config)      | ✅ Done   | DAG reuse without duplication              |
-| **1**   | `Dag.run()` / `Dag.test()` / `Dag.dryrun()` methods     | ✅ Done   | Developer workflow (validate → test → run) |
-| **2**   | Setup & Teardown (`teardown` field + worker scheduling) | Pending  | Cluster/staging lifecycle                  |
+| **1**   | `Dag.run()` / `Dag.test()` / `Dag.dryrun()` methods    | ✅ Done   | Developer workflow (validate → test → run) |
+| **1**   | LocalScheduler (trigger rules, branch, teardown, DAG callbacks) | ✅ Done | Full DAG lifecycle in-process       |
+| **1**   | Setup & Teardown (`teardown` field + scheduler)         | ✅ Done   | Cluster/staging lifecycle                  |
+| **1**   | Lean Jinja renderer (SandboxedEnvironment only)         | ✅ Done   | Two-pass: trigger-time + execute-time      |
 | **2**   | GitBundle sync (webhook + git pull)                     | Pending  | Production deployment                      |
 | **2**   | DockerExecutor / KubernetesExecutor                     | Pending  | Remote execution                           |
 | **2**   | `foreach_task` action type                              | Pending  | Dynamic parallelism                        |
-| **2**   | Scheduler + metadata-based DAG versioning               | Pending  | Scale to 10k DAGs                          |
+| **2**   | Deployment scheduler (cron + metadata-based versioning) | Pending  | Scale to 10k DAGs                          |
 | **2**   | API Server (FastAPI) + Deployment CRUD endpoints        | Pending  | Programmatic control plane                 |
 | **3**   | Remote plugin registry (`org/name@version`)             | Pending  | Ecosystem growth                           |
 | **3**   | Web UI (Deployments list + DAG viewer + log viewer)     | Pending  | Observability                              |

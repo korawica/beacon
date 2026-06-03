@@ -68,8 +68,12 @@ class Deployment(BaseModel):
     timezone: str = Field(
         default="UTC", description="IANA timezone for cron evaluation"
     )
-    start_date: datetime = Field(
-        description="No runs scheduled before this date"
+    start_date: datetime | None = Field(
+        default=None,
+        description=(
+            "No runs scheduled before this date. Optional for manual-only "
+            "deployments (``cron=None``)."
+        ),
     )
     end_date: datetime | None = Field(
         default=None,
@@ -108,7 +112,11 @@ class Deployment(BaseModel):
 
     @model_validator(mode="after")
     def _validate_date_range(self) -> Deployment:
-        if self.end_date is not None and self.end_date <= self.start_date:
+        if (
+            self.end_date is not None
+            and self.start_date is not None
+            and self.end_date <= self.start_date
+        ):
             raise ValueError(
                 f"end_date ({self.end_date}) must be after "
                 f"start_date ({self.start_date})"

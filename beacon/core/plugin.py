@@ -1,12 +1,21 @@
+"""Beacon plugin base and registry.
+
+A plugin is a Pydantic-validated class implementing one ``async execute``
+method. Plugins are looked up by string name (``uses: "py"``) from the
+global registry.
+
+Plugins are **plain Pydantic models** — they do not own templating,
+state, or lifecycle logic. The scheduler resolves all Jinja templates
+before instantiating a plugin, so plugins always receive concrete values.
+"""
+
 import logging
 from abc import ABC, abstractmethod
 from typing import Any, ClassVar, Final, Self, cast
 
 from pydantic import BaseModel
 
-from ..utils import to_snake_case
 from .context import Context
-from .templater import Templater
 
 __all__ = (
     "BASE_PLUGIN_NAME",
@@ -64,10 +73,9 @@ def register_plugin(
 class PluginMeta(type(BaseModel)):
     """Plugin Metaclass.
 
-    Auto-registers a subclass to :data:`PLUGINS_REGISTRY` **only when the
-    subclass explicitly declares** a ``plugin_name`` class variable in its
-    own body. This avoids accidentally registering intermediate / abstract
-    bases under an auto-generated snake_case name.
+    Auto-registers a subclass only when it **explicitly declares** a
+    ``plugin_name`` class variable in its own body. Intermediate / abstract
+    bases without ``plugin_name`` are NOT auto-registered.
     """
 
     def __new__(
@@ -90,20 +98,22 @@ class PluginMeta(type(BaseModel)):
         return pydantic_cls
 
 
-class BasePlugin(Templater, ABC, metaclass=PluginMeta):
+class BasePlugin(BaseModel, ABC, metaclass=PluginMeta):
     """Base Plugin Model.
 
     Subclasses register themselves automatically when they declare a
-    ``plugin_name`` ClassVar. Subclasses without an explicit ``plugin_name``
-    are treated as intermediate/abstract and are NOT auto-registered.
+    ``plugin_name`` ClassVar. Plugins are plain Pydantic models — Jinja
+    rendering is performed by the scheduler **before** the plugin is
+    instantiated.
     """
 
     plugin_name: ClassVar[str] = BASE_PLUGIN_NAME
     compatible_actions: ClassVar[tuple[str, ...]] = ()
     """Action types this plugin is compatible with.
 
-    Empty tuple means compatible with all action types.
-    Set to e.g. ``("branch",)`` to restrict to branch actions only.
+    Empty tuple means compatible with all action types. Set e.g.
+    ``("branch",)`` to restrict to branch actions only. Enforced by
+    :func:`beacon.dryrun.dryrun`.
     """
 
     @abstractmethod
@@ -111,14 +121,8 @@ class BasePlugin(Templater, ABC, metaclass=PluginMeta):
         """Plugin execution method.
 
         Args:
-            context (Context):
-                A DAG runned context that was generated after queue DAG.
+            context (Context): Runtime context built by the executor.
         """
         raise NotImplementedError(
             "The execute method of BasePlugin is not implemented."
         )
-
-
-# Silence ruff unused-import for the helper kept for callers who want manual
-# snake_case names (rare, but part of the public surface).
-_ = to_snake_case

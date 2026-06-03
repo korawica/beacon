@@ -83,7 +83,10 @@ class Dag(BaseModel):
 
         meta = JsonMetadata(metadata_path)
         scheduler = LocalScheduler(
-            self, meta=meta, max_concurrent=max_concurrent
+            self,
+            meta=meta,
+            max_concurrent=max_concurrent,
+            variables=variables or {},
         )
 
         run_id = f"run-{uuid.uuid4().hex[:8]}"

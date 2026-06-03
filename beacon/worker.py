@@ -54,7 +54,7 @@ class Worker:
         self,
         metadata: MetadataProtocol,
         executor: BaseExecutor | None = None,
-        max_concurrent: int = 10,
+        max_concurrent: int = 100,
     ) -> None:
         self.metadata = metadata
         self.executor = executor or LocalExecutor()
@@ -257,7 +257,9 @@ class Worker:
     async def _resolve_upstream_outputs(
         self, task_ctx: TaskContext, upstream_ids: list[str]
     ) -> None:
-        """Load outputs from upstream tasks into task_ctx.upstream_outputs."""
+        """Load upstream outputs into ``task_ctx.upstream_outputs`` and
+        re-render ``task_ctx.inputs`` so ``{{ outputs.X.Y }}`` resolves to
+        concrete values before the plugin sees them."""
         if not upstream_ids:
             return
         results = await asyncio.gather(
@@ -271,3 +273,34 @@ class Worker:
         for uid, upstream_ctx in zip(upstream_ids, results):
             if upstream_ctx and upstream_ctx.outputs:
                 task_ctx.upstream_outputs[uid] = upstream_ctx.outputs
+
+        # Late-bind outputs in any remaining Jinja in inputs.
+        from .core.renderer import Renderer
+
+        renderer = Renderer(
+            {
+                "params": task_ctx.params,
+                "outputs": task_ctx.upstream_outputs,
+                # vars/runtime were resolved at trigger time — pass empty/static.
+                "vars": lambda n: f"<unresolved: vars('{n}')>",
+                "runtime": {
+                    "run_id": task_ctx.run_id,
+                    "dag_id": task_ctx.dag_id,
+                    "task_id": task_ctx.task_id,
+                    "run_date": task_ctx.run_date,
+                    "logical_date": task_ctx.logical_date,
+                    "data_interval_start": task_ctx.data_interval_start,
+                    "data_interval_end": task_ctx.data_interval_end,
+                    "attempt_number": task_ctx.attempt_number + 1,
+                },
+            }
+        )
+        try:
+            task_ctx.inputs = renderer.render(task_ctx.inputs)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Late-bind render failed for %s/%s: %s",
+                task_ctx.dag_id,
+                task_ctx.task_id,
+                exc,
+            )

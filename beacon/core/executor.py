@@ -70,11 +70,9 @@ class LocalExecutor(BaseExecutor):
         """Execute task in the local process."""
         plugin_cls = self._resolve_plugin(task_ctx.plugin_name)
 
-        # Instantiate plugin with task inputs
-        plugin_instance = plugin_cls.model_validate(
-            task_ctx.inputs,
-            context={"jinja_renderer": None},
-        )
+        # Instantiate plugin with task inputs (already fully rendered by the
+        # scheduler — plugins never see Jinja).
+        plugin_instance = plugin_cls.model_validate(task_ctx.inputs)
 
         # Start attempt tracking first so attempt_number is correct in Context
         task_ctx.start_attempt(

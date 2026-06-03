@@ -1,7 +1,7 @@
 from .core.action import BaseAction
 from .core.context import Context
 from .core.plugin import PLUGINS_REGISTRY, BasePlugin, register_plugin
-from .core.templater import Templater
+from .core.renderer import Renderer, render_value
 from .core.trigger_rule import TriggerRule
 from .callback import Callback, OnDagEvent, OnTaskEvent
 from .providers.standard.hooks import JsonFileHook
@@ -33,12 +33,13 @@ __all__ = (
     "OnTaskEvent",
     "PLUGINS_REGISTRY",
     "Param",
+    "Renderer",
     "Sensor",
     "ShortCircuit",
     "Task",
-    "Templater",
     "TriggerRule",
     "Worker",
     "load_context",
     "register_plugin",
+    "render_value",
 )

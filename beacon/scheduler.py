@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Any
 from .callback import OnDagEvent
 from .core.action import BaseAction, DownstreamDirective
 from .core.executor import BaseExecutor, LocalExecutor
+from .core.renderer import Renderer
 from .core.state import TERMINAL_STATES, TaskState
 from .core.task_context import TaskContext
 from .core.trigger_rule import TriggerRule, evaluate_trigger_rule
@@ -167,11 +168,13 @@ class LocalScheduler:
         meta: JsonMetadata | None = None,
         executor: BaseExecutor | None = None,
         max_concurrent: int = 10,
+        variables: dict[str, Any] | None = None,
     ) -> None:
         self.dag = dag
         self.meta = meta or self._tempdir_meta()
         self.executor = executor or LocalExecutor()
         self.max_concurrent = max_concurrent
+        self.variables = variables or {}
 
     @staticmethod
     def _tempdir_meta() -> JsonMetadata:
@@ -441,8 +444,46 @@ class LocalScheduler:
         on_terminal: Any,
         teardown_phase: bool,
     ) -> None:
-        """Build TaskContext and submit to the worker."""
+        """Build TaskContext and submit to the worker.
+
+        Rendering happens here so that ``params`` / ``vars()`` / ``runtime``
+        are resolved at enqueue time. Upstream outputs are resolved by the
+        worker right before execution.
+        """
         merged_inputs = {**self.dag.default_inputs, **action.inputs}
+
+        # Trigger-time render: bind params, vars, runtime. Upstream outputs
+        # are bound to ``{}`` here; the worker fills them after dep lookup.
+        renderer = Renderer(
+            {
+                "params": params,
+                "vars": lambda n: self.variables.get(
+                    n, f"<unresolved: vars('{n}')>"
+                ),
+                "runtime": {
+                    "run_id": run_id,
+                    "dag_id": self.dag.id,
+                    "task_id": tid,
+                    "run_date": now,
+                    "logical_date": now,
+                    "data_interval_start": now,
+                    "data_interval_end": now,
+                    "attempt_number": 1,
+                },
+                "outputs": {},
+            }
+        )
+        try:
+            rendered_inputs = renderer.render(merged_inputs)
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "Failed to render inputs for %s/%s: %s",
+                self.dag.id,
+                tid,
+                exc,
+            )
+            rendered_inputs = merged_inputs
+
         task_ctx = action.build_task_context(
             run_id=run_id,
             dag_id=self.dag.id,
@@ -452,7 +493,7 @@ class LocalScheduler:
             data_interval_start=now,
             data_interval_end=now,
             params=params,
-            rendered_inputs=merged_inputs,
+            rendered_inputs=rendered_inputs,
         )
         # For teardowns we expose the setup task's outputs even though it's
         # not in action.upstream.

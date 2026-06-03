@@ -319,7 +319,12 @@ def _detect_cycle(task_map: dict[str, Any]) -> list[str] | None:
 
 
 def _topological_sort(task_map: dict[str, Any]) -> list[str]:
-    """Compute execution order via topological sort."""
+    """Compute execution order via topological sort (Kahn's algorithm).
+
+    Uses a min-heap so ties resolve by lexical order with O(N log N) cost.
+    """
+    import heapq
+
     in_degree = {tid: 0 for tid in task_map}
     downstream: dict[str, list[str]] = {tid: [] for tid in task_map}
 
@@ -329,17 +334,17 @@ def _topological_sort(task_map: dict[str, Any]) -> list[str]:
                 in_degree[tid] += 1
                 downstream[up].append(tid)
 
-    queue = [tid for tid, deg in in_degree.items() if deg == 0]
+    heap: list[str] = [tid for tid, deg in in_degree.items() if deg == 0]
+    heapq.heapify(heap)
     order: list[str] = []
 
-    while queue:
-        queue.sort()  # deterministic order
-        node = queue.pop(0)
+    while heap:
+        node = heapq.heappop(heap)
         order.append(node)
         for child in downstream[node]:
             in_degree[child] -= 1
             if in_degree[child] == 0:
-                queue.append(child)
+                heapq.heappush(heap, child)
 
     return order
 
@@ -375,54 +380,41 @@ def _render_inputs(
     dag_id: str,
     task_id: str,
 ) -> dict[str, Any]:
-    """Best-effort Jinja rendering of task inputs."""
-    from jinja2 import Template
+    """Render task inputs with the lean :class:`Renderer`.
 
-    rendered = {}
+    Unknown ``vars()`` keys resolve to a sentinel string so dryrun can show
+    the template without exploding. Other undefined names raise (the user
+    likely typoed a key) and the warning is collected on ``result``.
+    """
+    from .core.renderer import Renderer
 
     def vars_func(name: str) -> str:
         return variables.get(name, f"<unresolved: vars('{name}')>")
 
-    runtime_ctx = {
-        "run_id": f"dryrun-{dag_id}",
-        "dag_id": dag_id,
-        "task_id": task_id,
-        "run_date": logical_date,
-        "logical_date": logical_date,
-        "data_interval_start": data_interval_start,
-        "data_interval_end": data_interval_end,
-        "attempt_number": 1,
+    ctx = {
+        "params": params,
+        "vars": vars_func,
+        "outputs": {},
+        "runtime": {
+            "run_id": f"dryrun-{dag_id}",
+            "dag_id": dag_id,
+            "task_id": task_id,
+            "run_date": logical_date,
+            "logical_date": logical_date,
+            "data_interval_start": data_interval_start,
+            "data_interval_end": data_interval_end,
+            "attempt_number": 1,
+        },
     }
-
+    renderer = Renderer(ctx)
+    rendered: dict[str, Any] = {}
     for key, value in inputs.items():
-        if isinstance(value, str) and "{{" in value:
-            try:
-                tmpl = Template(value)
-                rendered_val = tmpl.render(
-                    params=params,
-                    vars=vars_func,
-                    outputs={},  # no upstream outputs at dry-run
-                    runtime=runtime_ctx,
-                )
-                rendered[key] = rendered_val
-            except Exception as exc:
-                result.warnings.append(
-                    f"[{task_id}] Failed to render '{key}': {exc}"
-                )
-                rendered[key] = value
-        elif isinstance(value, dict):
-            rendered[key] = _render_inputs(
-                value,
-                params,
-                variables,
-                logical_date,
-                data_interval_start,
-                data_interval_end,
-                result,
-                dag_id,
-                task_id,
+        try:
+            rendered[key] = renderer.render(value)
+        except Exception as exc:  # noqa: BLE001
+            result.warnings.append(
+                f"[{task_id}] Failed to render '{key}': {exc}"
             )
-        else:
             rendered[key] = value
 
     return rendered
