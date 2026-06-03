@@ -18,11 +18,17 @@ import asyncio
 import logging
 import traceback
 from abc import ABC, abstractmethod
+from contextlib import nullcontext
 
 from .context import Context
 from .plugin import PLUGINS_REGISTRY, BasePlugin
 from .task_context import AttemptStatus, TaskContext
 from ..errors import TaskFailed, TaskSkipped
+from ..logging import (
+    capture_stdout_stderr,
+    should_capture_stdout,
+    task_log_context,
+)
 
 logger = logging.getLogger("beacon.executor")
 
@@ -80,6 +86,12 @@ class LocalExecutor(BaseExecutor):
             executor_ref=None,
         )
 
+        # Logger reaches the unified logging pipeline; ContextVar tags
+        # attribute every record to this (dag_id, run_id, task_id, attempt).
+        task_logger = logging.getLogger(
+            f"beacon.task.{task_ctx.dag_id}.{task_ctx.task_id}"
+        )
+
         # Build lightweight Context for the plugin
         context: Context = {
             "run_id": task_ctx.run_id,
@@ -92,15 +104,31 @@ class LocalExecutor(BaseExecutor):
             "params": task_ctx.params,
             "attempt_number": task_ctx.attempt_number,
             "upstream_outputs": task_ctx.upstream_outputs,
+            "logger": task_logger,
         }
 
+        stdout_cm = (
+            capture_stdout_stderr(task_logger)
+            if should_capture_stdout()
+            else nullcontext()
+        )
+
         try:
-            # Run with optional timeout
-            if task_ctx.execution_timeout:
-                async with asyncio.timeout(task_ctx.execution_timeout):
+            with (
+                task_log_context(
+                    task_ctx.dag_id,
+                    task_ctx.run_id,
+                    task_ctx.task_id,
+                    task_ctx.attempt_number,
+                ),
+                stdout_cm,
+            ):
+                # Run with optional timeout
+                if task_ctx.execution_timeout:
+                    async with asyncio.timeout(task_ctx.execution_timeout):
+                        result = await plugin_instance.execute(context)
+                else:
                     result = await plugin_instance.execute(context)
-            else:
-                result = await plugin_instance.execute(context)
 
             # Success
             task_ctx.finish_attempt(

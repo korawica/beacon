@@ -4,6 +4,7 @@ from .core.plugin import PLUGINS_REGISTRY, BasePlugin, register_plugin
 from .core.renderer import Renderer, render_value
 from .core.trigger_rule import TriggerRule
 from .callback import Callback, OnDagEvent, OnTaskEvent
+from .logging import configure_logging, get_dispatcher, shutdown_logging
 from .providers.standard.hooks import JsonFileHook
 from .models.dag import Dag
 from .models.deployment import Deployment
@@ -39,7 +40,10 @@ __all__ = (
     "Task",
     "TriggerRule",
     "Worker",
+    "configure_logging",
+    "get_dispatcher",
     "load_context",
     "register_plugin",
     "render_value",
+    "shutdown_logging",
 )

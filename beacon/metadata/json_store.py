@@ -145,6 +145,22 @@ class JsonMetadata:
             if d
         }
 
+    async def get_task_outputs(
+        self, run_id: str, dag_id: str, task_id: str
+    ) -> dict[str, Any]:
+        """Fast path: read only the ``outputs`` field from a task context.
+
+        Skips the full ``TaskContext`` Pydantic validation, which is
+        significant when downstream tasks resolve many upstream outputs.
+        Returns ``{}`` if the task context or outputs are missing.
+        """
+        path = self._task_context_path(dag_id, run_id, task_id)
+        data = await _async_read(path)
+        if not data:
+            return {}
+        outputs = data.get("outputs") or {}
+        return outputs if isinstance(outputs, dict) else {}
+
     # --- TaskState ---
 
     async def set_task_state(

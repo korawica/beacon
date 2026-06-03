@@ -262,17 +262,30 @@ class Worker:
         concrete values before the plugin sees them."""
         if not upstream_ids:
             return
-        results = await asyncio.gather(
-            *(
-                self.metadata.get_task_context(
-                    task_ctx.run_id, task_ctx.dag_id, uid
+        # Fast path when the store exposes a Pydantic-skipping outputs reader.
+        get_outputs = getattr(self.metadata, "get_task_outputs", None)
+        if callable(get_outputs):
+            results = await asyncio.gather(
+                *(
+                    get_outputs(task_ctx.run_id, task_ctx.dag_id, uid)
+                    for uid in upstream_ids
                 )
-                for uid in upstream_ids
             )
-        )
-        for uid, upstream_ctx in zip(upstream_ids, results):
-            if upstream_ctx and upstream_ctx.outputs:
-                task_ctx.upstream_outputs[uid] = upstream_ctx.outputs
+            for uid, outputs in zip(upstream_ids, results):
+                if outputs:
+                    task_ctx.upstream_outputs[uid] = outputs
+        else:
+            results = await asyncio.gather(
+                *(
+                    self.metadata.get_task_context(
+                        task_ctx.run_id, task_ctx.dag_id, uid
+                    )
+                    for uid in upstream_ids
+                )
+            )
+            for uid, upstream_ctx in zip(upstream_ids, results):
+                if upstream_ctx and upstream_ctx.outputs:
+                    task_ctx.upstream_outputs[uid] = upstream_ctx.outputs
 
         # Late-bind outputs in any remaining Jinja in inputs.
         from .core.renderer import Renderer

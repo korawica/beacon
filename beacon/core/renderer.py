@@ -26,6 +26,19 @@ from beacon.utils import is_jinja
 __all__ = ("Renderer", "render_value")
 
 
+# Module-level shared environment. Compiling a Jinja template is the
+# expensive part; the env's internal LRU caches parsed templates so
+# repeated renders of the same string (e.g. across many tasks of the same
+# DAG, or across many runs of the same deployment) skip the parse step.
+# SandboxedEnvironment is stateless w.r.t. context, so sharing is safe.
+_ENV = SandboxedEnvironment(
+    undefined=StrictUndefined,
+    extensions=("jinja2.ext.do",),
+    autoescape=False,
+    cache_size=400,
+)
+
+
 class Renderer:
     """Lean Jinja renderer.
 
@@ -33,15 +46,9 @@ class Renderer:
     with a fixed context, then walked recursively over inputs.
     """
 
-    __slots__ = ("env", "ctx")
+    __slots__ = ("ctx",)
 
     def __init__(self, ctx: dict[str, Any] | None = None) -> None:
-        self.env = SandboxedEnvironment(
-            undefined=StrictUndefined,
-            extensions=("jinja2.ext.do",),
-            autoescape=False,
-            cache_size=0,
-        )
         self.ctx: dict[str, Any] = ctx or {}
 
     def render(self, value: Any) -> Any:
@@ -59,7 +66,7 @@ class Renderer:
     def _render_string(self, value: str) -> str:
         if not is_jinja(value, pure=False):
             return value
-        tmpl = self.env.from_string(value)
+        tmpl = _ENV.from_string(value)
         return tmpl.render(**self.ctx)
 
 
