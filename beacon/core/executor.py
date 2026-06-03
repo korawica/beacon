@@ -22,6 +22,7 @@ from abc import ABC, abstractmethod
 from .context import Context
 from .plugin import PLUGINS_REGISTRY, BasePlugin
 from .task_context import AttemptStatus, TaskContext
+from ..errors import TaskFailed, TaskSkipped
 
 logger = logging.getLogger("beacon.executor")
 
@@ -114,6 +115,23 @@ class LocalExecutor(BaseExecutor):
                 state=AttemptStatus.TIMED_OUT,
                 error=f"Execution timed out after {task_ctx.execution_timeout}s",
             )
+
+        except TaskSkipped as exc:
+            # Plugin determined task should be skipped — no retry
+            task_ctx.finish_attempt(
+                state=AttemptStatus.SKIPPED,
+                error=str(exc) if str(exc) else None,
+            )
+            task_ctx.retries = 0
+
+        except TaskFailed as exc:
+            # Permanent failure — exhaust retries so worker won't retry
+            task_ctx.finish_attempt(
+                state=AttemptStatus.FAILED,
+                error=str(exc),
+                error_traceback=traceback.format_exc(),
+            )
+            task_ctx.retries = 0
 
         except Exception as exc:
             task_ctx.finish_attempt(

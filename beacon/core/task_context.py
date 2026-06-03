@@ -29,6 +29,7 @@ class AttemptStatus(StrEnum):
     RUNNING = "running"
     SUCCESS = "success"
     FAILED = "failed"
+    SKIPPED = "skipped"
     TIMED_OUT = "timed_out"
 
 

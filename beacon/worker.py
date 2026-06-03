@@ -4,6 +4,8 @@ The worker dequeues task messages, dispatches them to the executor,
 manages state transitions, retries, and callbacks.
 
 Usage:
+    from beacon.metadata import JsonMetadata  # or SqliteMetadata, etc.
+
     metadata = JsonMetadata("./metadata.db")
     worker = Worker(metadata)
 
@@ -19,10 +21,10 @@ import logging
 from dataclasses import dataclass, field
 
 from .callback import OnTaskEvent
+from .core.context import MetadataProtocol
 from .core.executor import BaseExecutor, LocalExecutor
 from .core.state import TaskState
 from .core.task_context import AttemptStatus, TaskContext
-from .metadata.json_store import JsonMetadata
 
 logger = logging.getLogger("beacon.worker")
 
@@ -44,7 +46,7 @@ class Worker:
 
     def __init__(
         self,
-        metadata: JsonMetadata,
+        metadata: MetadataProtocol,
         executor: BaseExecutor | None = None,
         max_concurrent: int = 10,
     ) -> None:
@@ -154,6 +156,14 @@ class Worker:
                 )
                 await self._fire(msg.callbacks, "success", task_ctx)
                 logger.info("Task %s/%s succeeded", dag_id, task_id)
+                return
+
+            if last and last.state == AttemptStatus.SKIPPED:
+                await self.metadata.set_task_state(
+                    run_id, dag_id, task_id, TaskState.SKIPPED
+                )
+                await self._fire(msg.callbacks, "skipped", task_ctx)
+                logger.info("Task %s/%s skipped", dag_id, task_id)
                 return
 
             # Failed — check retries

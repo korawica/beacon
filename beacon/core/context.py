@@ -10,16 +10,50 @@ For persistent task state across retries and remote executors, see
 from datetime import datetime
 from typing import Any, Protocol, TypedDict
 
+from .state import TaskState
+from .task_context import TaskContext
+
 
 class MetadataProtocol(Protocol):
-    """Protocol for metadata store access from within a plugin."""
+    """Protocol that all metadata stores must satisfy.
+
+    Any class implementing these methods can be used as the metadata store
+    for the Worker, Scheduler, and API Server — without inheritance.
+    """
+
+    async def create_dag_run(
+        self,
+        run_id: str,
+        dag_id: str,
+        dag_version: str,
+        state: str = "running",
+        logical_date: datetime | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> None: ...
+
+    async def get_dag_run(
+        self, run_id: str, dag_id: str
+    ) -> dict[str, Any] | None: ...
+
+    async def update_dag_run_state(
+        self, run_id: str, dag_id: str, state: str
+    ) -> None: ...
+
+    async def put_task_context(
+        self, run_id: str, dag_id: str, task_id: str, task_ctx: TaskContext
+    ) -> None: ...
 
     async def get_task_context(
         self, run_id: str, dag_id: str, task_id: str
-    ) -> Any: ...
-    async def put_task_context(
-        self, run_id: str, dag_id: str, task_id: str, ctx: Any
+    ) -> TaskContext | None: ...
+
+    async def set_task_state(
+        self, run_id: str, dag_id: str, task_id: str, state: TaskState
     ) -> None: ...
+
+    async def get_task_state(
+        self, run_id: str, dag_id: str, task_id: str
+    ) -> TaskState | None: ...
 
 
 class LoggerProtocol(Protocol):

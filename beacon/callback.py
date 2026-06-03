@@ -56,8 +56,8 @@ class OnTaskEvent(BaseModel):
 
     model_config = {"arbitrary_types_allowed": True}
 
-    on_event: Literal["start", "success", "failure", "retry"] = Field(
-        description="Event that triggers this callback"
+    on_event: Literal["start", "success", "failure", "retry", "skipped"] = (
+        Field(description="Event that triggers this callback")
     )
     hook: str | Any = Field(
         description="Hook name (string) or hook class/instance"

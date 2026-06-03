@@ -75,6 +75,7 @@ VALID_TRANSITIONS: dict[TaskState, frozenset[TaskState]] = {
         {
             TaskState.SUCCESS,
             TaskState.FAILED,
+            TaskState.SKIPPED,
             TaskState.UP_FOR_RETRY,
             TaskState.REMOVED,
         }
