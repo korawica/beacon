@@ -889,14 +889,14 @@ running task instances.
 
 | Phase  | Deliverable                                           | Status   | Validates                           |
 |--------|-------------------------------------------------------|----------|-------------------------------------|
-| **0**  | `PythonPlugin.execute()` end-to-end                   | ✅ Done  | Core loop                           |
-| **0**  | TaskContext + Attempt + LocalExecutor                  | ✅ Done  | State persistence + retry           |
-| **0**  | Bundle plugin auto-discovery (`./plugins/`)           | ✅ Done  | Custom plugin deployment            |
-| **0**  | `load_context()` for user Python files                | ✅ Done  | Runtime access without coupling     |
-| **0**  | Task state machine with valid transitions             | ✅ Done  | Enforced lifecycle                  |
-| **1**  | Hook system with registry resolution (string + class) | Pending  | Callback parity Python/YAML         |
-| **1**  | Async worker with scheduler loop                      | Pending  | Full lifecycle transitions          |
-| **1**  | Metadata store: TaskContext CRUD                      | Pending  | Persistence for remote executors    |
+| **0**  | `PythonPlugin.execute()` end-to-end                   | ✅ Done   | Core loop                           |
+| **0**  | TaskContext + Attempt + LocalExecutor                 | ✅ Done   | State persistence + retry           |
+| **0**  | Bundle plugin auto-discovery (`./plugins/`)           | ✅ Done   | Custom plugin deployment            |
+| **0**  | `load_context()` for user Python files                | ✅ Done   | Runtime access without coupling     |
+| **0**  | Task state machine with valid transitions             | ✅ Done   | Enforced lifecycle                  |
+| **1**  | Hook system with registry resolution (string + class) | ✅ Done   | Callback parity Python/YAML         |
+| **1**  | Async worker with retry scheduling                    | ✅ Done   | Full lifecycle transitions          |
+| **1**  | Metadata store (JsonMetadata): TaskContext CRUD       | ✅ Done   | Persistence for remote executors    |
 | **2**  | GitBundle sync (webhook + git pull)                   | Pending  | Production deployment               |
 | **2**  | DockerExecutor / KubernetesExecutor                   | Pending  | Remote execution                    |
 | **2**  | `foreach_task` action type                            | Pending  | Dynamic parallelism                 |
