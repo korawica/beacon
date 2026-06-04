@@ -5,7 +5,9 @@ Structure::
     {base_path}/
     ├── dag_runs/{dag_id}/{run_id}.json
     ├── task_contexts/{dag_id}/{run_id}/{task_id}.json
-    └── task_states/{dag_id}/{run_id}/{task_id}.json
+    ├── task_states/{dag_id}/{run_id}/{task_id}.json
+    ├── deployments/{deployment_id}.json
+    └── triggers/{deployment_id}/{trigger_id}.json   # pending manual triggers
 """
 
 import asyncio
@@ -13,6 +15,7 @@ import json
 import logging
 import os
 import tempfile
+import uuid
 from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
@@ -34,10 +37,14 @@ class JsonMetadata:
         self._dag_runs_dir = self.base_path / "dag_runs"
         self._task_contexts_dir = self.base_path / "task_contexts"
         self._task_states_dir = self.base_path / "task_states"
+        self._deployments_dir = self.base_path / "deployments"
+        self._triggers_dir = self.base_path / "triggers"
         for d in (
             self._dag_runs_dir,
             self._task_contexts_dir,
             self._task_states_dir,
+            self._deployments_dir,
+            self._triggers_dir,
         ):
             d.mkdir(parents=True, exist_ok=True)
 
@@ -287,6 +294,133 @@ class JsonMetadata:
 
     def _task_state_path(self, dag_id: str, run_id: str, task_id: str) -> Path:
         return self._task_states_dir / dag_id / run_id / f"{task_id}.json"
+
+    def _deployment_path(self, deployment_id: str) -> Path:
+        return self._deployments_dir / f"{deployment_id}.json"
+
+    def _trigger_path(self, deployment_id: str, trigger_id: str) -> Path:
+        return self._triggers_dir / deployment_id / f"{trigger_id}.json"
+
+    # --- Deployments ---
+    # Stored as plain dicts (Deployment.model_dump) plus scheduler bookkeeping
+    # under a top-level ``_scheduler`` key (``last_scheduled_at``).
+
+    async def upsert_deployment(self, deployment: dict[str, Any]) -> None:
+        """Create or replace a deployment record (keyed by ``id``)."""
+        did = deployment["id"]
+        path = self._deployment_path(did)
+        existing = await _async_read(path) or {}
+        # Preserve scheduler bookkeeping across updates.
+        scheduler = existing.get("_scheduler", {})
+        record = {**deployment, "_scheduler": scheduler}
+        await _async_write(path, record)
+
+    async def get_deployment(self, deployment_id: str) -> dict[str, Any] | None:
+        return await _async_read(self._deployment_path(deployment_id))
+
+    async def list_deployments(self) -> list[dict[str, Any]]:
+        files = sorted(self._deployments_dir.glob("*.json"))
+        if not files:
+            return []
+        datas = await asyncio.gather(*(_async_read(f) for f in files))
+        return [d for d in datas if d]
+
+    async def delete_deployment(self, deployment_id: str) -> bool:
+        path = self._deployment_path(deployment_id)
+        try:
+            path.unlink()
+            return True
+        except FileNotFoundError:
+            return False
+
+    async def update_deployment_scheduler_state(
+        self,
+        deployment_id: str,
+        *,
+        last_scheduled_at: datetime,
+    ) -> None:
+        """Record the most recent logical_date the scheduler fired for this
+        deployment so we don't double-schedule the same tick."""
+        path = self._deployment_path(deployment_id)
+        data = await _async_read(path)
+        if not data:
+            return
+        scheduler = data.setdefault("_scheduler", {})
+        scheduler["last_scheduled_at"] = last_scheduled_at.isoformat()
+        await _async_write(path, data)
+
+    # --- Manual-trigger queue ---
+    # A trigger is a JSON file under triggers/{deployment_id}/{uuid}.json.
+    # The scheduler consumes (= deletes) each file when it spawns the run.
+
+    async def enqueue_trigger(
+        self,
+        deployment_id: str,
+        params: dict[str, Any] | None = None,
+    ) -> str:
+        """Write a pending manual-trigger request. Returns the trigger id."""
+        trigger_id = uuid.uuid4().hex[:12]
+        path = self._trigger_path(deployment_id, trigger_id)
+        await _async_write(
+            path,
+            {
+                "trigger_id": trigger_id,
+                "deployment_id": deployment_id,
+                "params": params or {},
+                "created_at": datetime.now().isoformat(),
+            },
+        )
+        return trigger_id
+
+    async def drain_triggers(
+        self, deployment_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Atomically pop every pending trigger.
+
+        If ``deployment_id`` is given, only that deployment's triggers are
+        drained. Files are deleted after read; partial failure leaves the
+        un-read files in place for the next tick.
+        """
+        if deployment_id is not None:
+            dirs = [self._triggers_dir / deployment_id]
+        else:
+            dirs = [d for d in self._triggers_dir.iterdir() if d.is_dir()]
+        out: list[dict[str, Any]] = []
+        for d in dirs:
+            if not d.exists():
+                continue
+            for f in sorted(d.glob("*.json")):
+                data = await _async_read(f)
+                if data:
+                    out.append(data)
+                try:
+                    f.unlink()
+                except FileNotFoundError:
+                    pass
+        return out
+
+    # --- Listing ---
+
+    async def list_dag_runs(
+        self,
+        dag_id: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """List recent DAG runs (active + terminal), newest first."""
+        if dag_id is not None:
+            shard_dirs = [self._dag_runs_dir / dag_id]
+        else:
+            shard_dirs = [d for d in self._dag_runs_dir.iterdir() if d.is_dir()]
+        files: list[Path] = []
+        for d in shard_dirs:
+            if d.exists():
+                files.extend(d.glob("*.json"))
+        files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        files = files[:limit]
+        if not files:
+            return []
+        datas = await asyncio.gather(*(_async_read(f) for f in files))
+        return [d for d in datas if d]
 
 
 # --- Async I/O helpers ---
