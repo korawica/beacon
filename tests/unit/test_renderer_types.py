@@ -21,7 +21,8 @@ from typing import Any, ClassVar
 import pytest
 from pydantic import Field
 
-from beacon import BasePlugin, Dag, DagRunner, Task, render_value
+from beacon import BasePlugin, Dag, DagRunner, Task
+from beacon.core import Renderer
 from beacon.metadata import JsonMetadata
 
 
@@ -56,7 +57,7 @@ from beacon.metadata import JsonMetadata
 )
 def test_pure_template_preserves_value_and_type(value: Any) -> None:
     """`"{{ x }}"` must return `x` itself (same value, same type)."""
-    out = render_value("{{ x }}", {"x": value})
+    out = Renderer({"x": value}).render("{{ x }}")
     assert out == value, f"value mismatch for {value!r}: got {out!r}"
     # Type preservation: bool must not be int, list must not be str, etc.
     if value is None:
@@ -70,13 +71,13 @@ def test_pure_template_preserves_value_and_type(value: Any) -> None:
 
 def test_bool_true_and_false_distinct_from_strings() -> None:
     """Catches the common Pydantic footgun where `'False'` is truthy."""
-    assert render_value("{{ x }}", {"x": True}) is True
-    assert render_value("{{ x }}", {"x": False}) is False
+    assert Renderer({"x": True}).render("{{ x }}") is True
+    assert Renderer({"x": False}).render("{{ x }}") is False
 
 
 def test_none_distinct_from_string_none() -> None:
-    assert render_value("{{ x }}", {"x": None}) is None
-    assert render_value("{{ x }}", {"x": None}) != "None"
+    assert Renderer({"x": None}).render("{{ x }}") is None
+    assert Renderer({"x": None}).render("{{ x }}") != "None"
 
 
 # ---------------------------------------------------------------------------
@@ -94,7 +95,7 @@ def test_none_distinct_from_string_none() -> None:
     ],
 )
 def test_mixed_template_returns_string(tmpl, ctx, expected) -> None:
-    out = render_value(tmpl, ctx)
+    out = Renderer(ctx).render(tmpl)
     assert out == expected
     assert isinstance(out, str)
 
@@ -124,7 +125,7 @@ def test_recursive_dict_preserves_types_per_leaf() -> None:
         "source": "postgres",
         "limit": 1000,
     }
-    out = render_value(inputs, {"params": params})
+    out = Renderer({"params": params}).render(inputs)
 
     assert out["count"] == 5 and type(out["count"]) is int
     assert out["rows"] == [1, 2, 3] and type(out["rows"]) is list
@@ -145,22 +146,22 @@ def test_dict_method_name_gotcha_is_documented() -> None:
     Pinning this so it's a documented gotcha, not a surprise regression."""
     params = {"items": [1, 2, 3]}
     # Dotted access returns the bound method (str-ified by NativeTemplate).
-    out = render_value("{{ params.items }}", {"params": params})
+    out = Renderer({"params": params}).render("{{ params.items }}")
     assert out != [1, 2, 3]  # NOT what you might want
     # Bracket access works correctly.
-    out_bracket = render_value("{{ params['items'] }}", {"params": params})
+    out_bracket = Renderer({"params": params}).render("{{ params['items'] }}")
     assert out_bracket == [1, 2, 3]
 
 
 def test_datetime_preserves_through_pure_template() -> None:
     """Datetimes are a common case; templates must not stringify them."""
     dt = datetime(2026, 6, 4, 12, 30, 0)
-    out = render_value("{{ ts }}", {"ts": dt})
+    out = Renderer({"ts": dt}).render("{{ ts }}")
     # NativeEnvironment evaluates the *string repr*; datetime's repr is
     # not a literal, so it falls back to str representation. Document that:
     # if you need a datetime through, pass it as-is (don't wrap in Jinja).
     # The recursive renderer DOES pass non-string scalars through untouched.
-    out_passthrough = render_value(dt, {})
+    out_passthrough = Renderer({}).render(dt)
     assert out_passthrough is dt
     # And the templated path returns the str(dt) representation, NOT crash:
     assert isinstance(out, (str, datetime))
@@ -175,14 +176,14 @@ def test_sandbox_blocks_dunder_access_after_native_switch() -> None:
     from jinja2.exceptions import SecurityError
 
     with pytest.raises(SecurityError):
-        render_value("{{ x.__class__.__mro__ }}", {"x": 1})
+        Renderer({"x": 1}).render("{{ x.__class__.__mro__ }}")
 
 
 def test_sandbox_blocks_subclasses_walk() -> None:
     from jinja2.exceptions import SecurityError
 
     with pytest.raises(SecurityError):
-        render_value("{{ ().__class__.__mro__ }}", {})
+        Renderer({}).render("{{ ().__class__.__mro__ }}")
 
 
 # ---------------------------------------------------------------------------
@@ -324,15 +325,15 @@ def test_e2e_upstream_outputs_preserve_types(tmp_path):
 
 
 def test_empty_string_is_not_jinja_passthrough() -> None:
-    assert render_value("", {}) == ""
+    assert Renderer({}).render("") == ""
 
 
 def test_string_that_looks_like_python_literal_stays_string() -> None:
     """A plain string `"5"` must not be auto-evaluated to int 5."""
-    assert render_value("5", {}) == "5"
-    assert isinstance(render_value("5", {}), str)
-    assert render_value("[1, 2]", {}) == "[1, 2]"
-    assert isinstance(render_value("[1, 2]", {}), str)
+    assert Renderer({}).render("5") == "5"
+    assert isinstance(Renderer({}).render("5"), str)
+    assert Renderer({}).render("[1, 2]") == "[1, 2]"
+    assert isinstance(Renderer({}).render("[1, 2]"), str)
 
 
 def test_decimal_pure_template_returns_str_or_decimal() -> None:
@@ -340,17 +341,18 @@ def test_decimal_pure_template_returns_str_or_decimal() -> None:
     when it appears inside a template. Passthrough (no template) preserves."""
     d = Decimal("1.5")
     # Passthrough preserves Decimal exactly.
-    assert render_value(d, {}) == d and isinstance(render_value(d, {}), Decimal)
+    assert Renderer({}).render(d) == d and isinstance(
+        Renderer({}).render(d), Decimal
+    )
     # Templated path: documented as str (no crash).
-    out = render_value("{{ d }}", {"d": d})
+    out = Renderer({"d": d}).render("{{ d }}")
     assert out == d or out == "1.5"
 
 
 def test_nested_template_inside_list_preserves_each_element() -> None:
-    out = render_value(
-        ["{{ a }}", "{{ b }}", "lit", "{{ c }}-mix"],
+    out = Renderer(
         {"a": 1, "b": [10, 20], "c": "X"},
-    )
+    ).render(["{{ a }}", "{{ b }}", "lit", "{{ c }}-mix"])
     assert out == [1, [10, 20], "lit", "X-mix"]
     assert type(out[0]) is int
     assert type(out[1]) is list

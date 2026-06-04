@@ -37,7 +37,7 @@ from jinja2.sandbox import SandboxedEnvironment
 
 from beacon.utils import is_jinja
 
-__all__ = ("Renderer", "render_value")
+__all__ = ("Renderer",)
 
 
 class _SandboxedNativeEnvironment(NativeEnvironment, SandboxedEnvironment):
@@ -95,7 +95,7 @@ class Renderer:
         types for pure expressions, ``str`` for mixed templates and
         non-literal results). Non-template strings pass through unchanged.
         """
-        if not is_jinja(value, pure=False):
+        if not is_jinja(value):
             return value
         tmpl = _ENV.from_string(value)
         result = tmpl.render(**self.ctx)
@@ -105,8 +105,3 @@ class Renderer:
         if isinstance(result, Undefined):
             str(result)  # raises UndefinedError for StrictUndefined
         return result
-
-
-def render_value(value: Any, ctx: dict[str, Any]) -> Any:
-    """Convenience helper for one-off rendering."""
-    return Renderer(ctx).render(value)

@@ -1,50 +1,73 @@
-from .core.action import BaseAction
-from .core.context import Context
-from .core.plugin import PLUGINS_REGISTRY, BasePlugin, register_plugin
-from .core.renderer import Renderer, render_value
-from .core.trigger_rule import TriggerRule
-from .callback import Callback, OnDagEvent, OnTaskEvent
-from .logging import configure_logging, get_dispatcher, shutdown_logging
-from .providers.standard.hooks import JsonFileHook
+"""Beacon — an everyday workflow orchestrator.
+
+Top-level package = the *DAG authoring* surface. Write DAGs, attach
+deployments per environment, plug in callbacks and custom plugins.
+
+For extension authoring (custom plugins, executors, metadata stores) see
+:mod:`beacon.core`. For observability hooks see
+:func:`configure_logging`.
+"""
+
+# --- DAG authoring ---------------------------------------------------------
+from .models.branch import Branch
 from .models.dag import Dag
 from .models.deployment import Deployment
 from .models.group import Group
-from .models.task import Task
-from .models.sensor import Sensor
-from .models.branch import Branch
-from .models.short_circuit import ShortCircuit
 from .models.param import Param
+from .models.sensor import Sensor
+from .models.short_circuit import ShortCircuit
+from .models.task import Task
+
+# --- Callbacks -------------------------------------------------------------
+from .callback import Callback, OnDagEvent, OnTaskEvent
+
+# --- Plugin extension (Context is what plugin.execute receives) ------------
+from .core.context import Context
+from .core.plugin import PLUGINS_REGISTRY, BasePlugin, register_plugin
+from .core.trigger_rule import TriggerRule
+
+# --- Runtime / user task code ----------------------------------------------
 from .runtime import load_context
-from .runner import DagRunResult, DagRunner, run_trigger
-from .worker import Worker
+
+# --- Running locally / advanced orchestration ------------------------------
+from .runner import DagRunResult, DagRunner
+
+# --- Observability ---------------------------------------------------------
+from .logging import configure_logging, get_dispatcher, shutdown_logging
+
+# --- Standard plugin auto-registration -------------------------------------
+# Importing the standard provider package is what wires built-in plugin
+# names (``empty``, ``py``, ``by_hour``, ...) into PLUGINS_REGISTRY so they
+# resolve out-of-the-box. The name is not re-exported.
+from .providers import standard as _standard  # noqa: F401
 
 __all__ = (
-    "BaseAction",
-    "BasePlugin",
+    # DAG authoring
     "Branch",
-    "Callback",
-    "Context",
     "Dag",
-    "DagRunResult",
     "Deployment",
     "Group",
-    "JsonFileHook",
-    "DagRunner",
-    "OnDagEvent",
-    "OnTaskEvent",
-    "PLUGINS_REGISTRY",
     "Param",
-    "Renderer",
     "Sensor",
     "ShortCircuit",
     "Task",
+    # Callbacks
+    "Callback",
+    "OnDagEvent",
+    "OnTaskEvent",
+    # Plugin extension
+    "BasePlugin",
+    "Context",
+    "PLUGINS_REGISTRY",
     "TriggerRule",
-    "Worker",
+    "register_plugin",
+    # Runtime
+    "load_context",
+    # Orchestration
+    "DagRunResult",
+    "DagRunner",
+    # Observability
     "configure_logging",
     "get_dispatcher",
-    "load_context",
-    "register_plugin",
-    "render_value",
-    "run_trigger",
     "shutdown_logging",
 )

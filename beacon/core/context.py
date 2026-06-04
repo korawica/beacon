@@ -7,6 +7,7 @@ For persistent task state across retries and remote executors, see
 `beacon.core.task_context.TaskContext`.
 """
 
+import logging
 from datetime import datetime
 from typing import Any, Protocol, TypedDict
 
@@ -56,15 +57,6 @@ class MetadataProtocol(Protocol):
     ) -> TaskState | None: ...
 
 
-class LoggerProtocol(Protocol):
-    """Protocol for task logger that writes to the Logging Store."""
-
-    def info(self, msg: str, *args: Any) -> None: ...
-    def error(self, msg: str, *args: Any) -> None: ...
-    def warning(self, msg: str, *args: Any) -> None: ...
-    def debug(self, msg: str, *args: Any) -> None: ...
-
-
 class Context(TypedDict, total=False):
     """Context passed to plugin.execute().
 
@@ -111,5 +103,5 @@ class Context(TypedDict, total=False):
     metadata: MetadataProtocol
     """Access to metadata store (read/write task context)."""
 
-    logger: LoggerProtocol
+    logger: logging.Logger
     """Structured logger → Logging Store."""

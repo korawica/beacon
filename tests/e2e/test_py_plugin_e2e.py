@@ -10,8 +10,8 @@ from beacon.core import (
     LocalExecutor,
     TaskContext,
     TaskState,
-    AttemptStatus,
 )
+from beacon.core.task_context import AttemptStatus
 
 # Ensure py plugin is registered
 from beacon.providers.standard.plugins import EmptyPlugin  # noqa: F401

@@ -58,11 +58,12 @@ def load_context() -> RuntimeContext:
     return ctx
 
 
-def set_runtime_context(ctx: RuntimeContext) -> None:
-    """Set the current beacon runtime context (called by the executor)."""
+# --- internal helpers (used only by the standard `py` plugin) -------------
+
+
+def _set_runtime_context(ctx: RuntimeContext) -> None:
     _current.set(ctx)
 
 
-def clear_runtime_context() -> None:
-    """Clear the current beacon runtime context (called by the executor)."""
+def _clear_runtime_context() -> None:
     _current.set(None)

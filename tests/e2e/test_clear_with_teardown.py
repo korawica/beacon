@@ -17,7 +17,8 @@ from typing import ClassVar
 
 import pytest
 
-from beacon import BasePlugin, Dag, DagRunner, Task, run_trigger
+from beacon import BasePlugin, Dag, DagRunner, Task
+from beacon.runner import run_trigger
 from beacon.metadata import JsonMetadata
 
 

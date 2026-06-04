@@ -138,7 +138,29 @@ class Worker:
             )
             await self._fire(msg.callbacks, "start", task_ctx)
 
-            task_ctx = await self.executor.run_task(task_ctx)
+            # Executors are contract-bound to never raise — every error is
+            # captured as a failed attempt on the returned task_ctx. This
+            # ``except`` is a defense-in-depth safety net so a buggy
+            # third-party executor cannot deadlock the DagRunner by
+            # killing the per-task coroutine before on_terminal fires.
+            try:
+                task_ctx = await self.executor.run_task(task_ctx)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "Executor crashed for %s/%s: %s", dag_id, task_id, exc
+                )
+                # If the executor crashed AFTER opening an attempt, close it;
+                # otherwise synthesize one so the worker's normal "failed →
+                # FAILED" path always has something to react to.
+                last = task_ctx.last_attempt
+                if last is None or last.state == AttemptStatus.RUNNING:
+                    if last is None:
+                        task_ctx.start_attempt(executor="unknown")
+                    task_ctx.finish_attempt(
+                        state=AttemptStatus.FAILED,
+                        error=f"executor crashed: {exc}",
+                    )
+                task_ctx.retries = 0
             await self.metadata.put_task_context(
                 run_id, dag_id, task_id, task_ctx
             )

@@ -1,12 +1,10 @@
-"""Quick smoke test for TaskContext and state machine."""
+"""Quick smoke test for TaskContext lifecycle."""
 
 from datetime import datetime
 from beacon.core import (
     TaskContext,
-    AttemptStatus,
-    validate_transition,
-    TaskState,
 )
+from beacon.core.task_context import AttemptStatus
 
 
 def test_task_context_lifecycle():
@@ -49,29 +47,6 @@ def test_task_context_lifecycle():
     assert len(restored.attempts) == 2
 
 
-def test_state_transitions():
-    validate_transition(TaskState.NONE, TaskState.SCHEDULED)
-    validate_transition(TaskState.SCHEDULED, TaskState.QUEUED)
-    validate_transition(TaskState.QUEUED, TaskState.RUNNING)
-    validate_transition(TaskState.RUNNING, TaskState.SUCCESS)
-    validate_transition(TaskState.RUNNING, TaskState.UP_FOR_RETRY)
-    validate_transition(TaskState.UP_FOR_RETRY, TaskState.QUEUED)
-
-    # Invalid transitions
-    try:
-        validate_transition(TaskState.SUCCESS, TaskState.RUNNING)
-        assert False, "Should have raised"
-    except ValueError:
-        pass
-
-    try:
-        validate_transition(TaskState.NONE, TaskState.RUNNING)
-        assert False, "Should have raised"
-    except ValueError:
-        pass
-
-
 if __name__ == "__main__":
     test_task_context_lifecycle()
-    test_state_transitions()
     print("All tests passed!")

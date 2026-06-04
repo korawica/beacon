@@ -38,8 +38,8 @@ from pydantic import Field
 from .....core import BasePlugin
 from .....runtime import (
     RuntimeContext,
-    clear_runtime_context,
-    set_runtime_context,
+    _clear_runtime_context,
+    _set_runtime_context,
 )
 
 if TYPE_CHECKING:
@@ -127,7 +127,7 @@ class PythonPlugin(BasePlugin):
             data_interval_end=context.get("data_interval_end"),
             logger=task_logger,
         )
-        set_runtime_context(runtime_ctx)
+        _set_runtime_context(runtime_ctx)
 
         try:
             # Import the Python file as a module
@@ -168,7 +168,7 @@ class PythonPlugin(BasePlugin):
                     os.environ[key] = original
 
             # Clear runtime context
-            clear_runtime_context()
+            _clear_runtime_context()
 
     @staticmethod
     def _import_file(path: Path):
@@ -223,7 +223,7 @@ class PythonPlugin(BasePlugin):
             data_interval_end=context.get("data_interval_end"),
             logger=task_logger,
         )
-        set_runtime_context(runtime_ctx)
+        _set_runtime_context(runtime_ctx)
 
         try:
             module = self._import_file(py_path)
@@ -242,4 +242,4 @@ class PythonPlugin(BasePlugin):
             if asyncio.iscoroutine(result):
                 await result
         finally:
-            clear_runtime_context()
+            _clear_runtime_context()

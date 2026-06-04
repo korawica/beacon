@@ -5,7 +5,8 @@ from typing import Any, ClassVar
 
 import pytest
 
-from beacon import BasePlugin, Dag, DagRunner, Renderer, Task, render_value
+from beacon import BasePlugin, Dag, DagRunner, Task
+from beacon.core import Renderer
 from beacon.metadata import JsonMetadata
 
 
@@ -25,22 +26,22 @@ def test_renderer_passes_through_plain_strings():
 
 
 def test_renderer_resolves_simple_var():
-    assert render_value("{{ x }}", {"x": "hi"}) == "hi"
+    assert Renderer({"x": "hi"}).render("{{ x }}") == "hi"
 
 
 def test_renderer_recurses_dict():
-    out = render_value({"a": "{{ x }}", "b": [1, "{{ x }}"]}, {"x": "X"})
+    out = Renderer({"x": "X"}).render({"a": "{{ x }}", "b": [1, "{{ x }}"]})
     assert out == {"a": "X", "b": [1, "X"]}
 
 
 def test_renderer_recurses_list_and_tuple():
-    assert render_value(["{{ a }}", "b"], {"a": "A"}) == ["A", "b"]
-    assert render_value(("{{ a }}", 2), {"a": "A"}) == ("A", 2)
+    assert Renderer({"a": "A"}).render(["{{ a }}", "b"]) == ["A", "b"]
+    assert Renderer({"a": "A"}).render(("{{ a }}", 2)) == ("A", 2)
 
 
 def test_renderer_vars_macro():
     ctx = {"vars": {"bucket": "prod-bucket"}.get}
-    assert render_value("{{ vars('bucket') }}", ctx) == "prod-bucket"
+    assert Renderer(ctx).render("{{ vars('bucket') }}") == "prod-bucket"
 
 
 def test_renderer_undefined_raises_strict():
@@ -48,7 +49,7 @@ def test_renderer_undefined_raises_strict():
     from jinja2 import UndefinedError
 
     with pytest.raises(UndefinedError):
-        render_value("{{ missing }}", {})
+        Renderer({}).render("{{ missing }}")
 
 
 def test_renderer_sandbox_blocks_attribute_attacks():
@@ -56,7 +57,7 @@ def test_renderer_sandbox_blocks_attribute_attacks():
     from jinja2.exceptions import SecurityError
 
     with pytest.raises(SecurityError):
-        render_value("{{ x.__class__.__mro__ }}", {"x": 1})
+        Renderer({"x": 1}).render("{{ x.__class__.__mro__ }}")
 
 
 # ─── Scheduler-level rendering ───────────────────────────────────────────

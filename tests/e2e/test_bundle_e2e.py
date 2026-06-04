@@ -17,8 +17,8 @@ from beacon.core import (
     PLUGINS_REGISTRY,
     LocalExecutor,
     TaskContext,
-    AttemptStatus,
 )
+from beacon.core.task_context import AttemptStatus
 from beacon.core.bundle import LocalBundle
 
 

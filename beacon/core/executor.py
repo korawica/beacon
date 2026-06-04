@@ -73,14 +73,17 @@ class LocalExecutor(BaseExecutor):
     executor_type: str = "local"
 
     async def run_task(self, task_ctx: TaskContext) -> TaskContext:
-        """Execute task in the local process."""
-        plugin_cls = self._resolve_plugin(task_ctx.plugin_name)
+        """Execute task in the local process.
 
-        # Instantiate plugin with task inputs (already fully rendered by the
-        # scheduler — plugins never see Jinja).
-        plugin_instance = plugin_cls.model_validate(task_ctx.inputs)
-
-        # Start attempt tracking first so attempt_number is correct in Context
+        ANY exception that surfaces from plugin lookup, model validation,
+        or ``plugin.execute()`` is captured and recorded as a failed
+        attempt on ``task_ctx``. ``run_task`` never re-raises — the worker
+        relies on the returned ``task_ctx`` to drive state transitions.
+        """
+        # Start attempt FIRST so the caller (worker) always has an attempt
+        # to inspect — even when plugin resolution or model validation blows
+        # up. Without this, a missing plugin would leave the worker with no
+        # attempt and no terminal state to react to (i.e., DAG hang).
         task_ctx.start_attempt(
             executor=self.executor_type,
             executor_ref=None,
@@ -92,7 +95,7 @@ class LocalExecutor(BaseExecutor):
             f"beacon.task.{task_ctx.dag_id}.{task_ctx.task_id}"
         )
 
-        # Build lightweight Context for the plugin
+        plugin_instance: BasePlugin | None = None
         context: Context = {
             "run_id": task_ctx.run_id,
             "dag_id": task_ctx.dag_id,
@@ -114,6 +117,9 @@ class LocalExecutor(BaseExecutor):
         )
 
         try:
+            plugin_cls = self._resolve_plugin(task_ctx.plugin_name)
+            plugin_instance = plugin_cls.model_validate(task_ctx.inputs)
+
             with (
                 task_log_context(
                     task_ctx.dag_id,
@@ -123,14 +129,12 @@ class LocalExecutor(BaseExecutor):
                 ),
                 stdout_cm,
             ):
-                # Run with optional timeout
                 if task_ctx.execution_timeout:
                     async with asyncio.timeout(task_ctx.execution_timeout):
                         result = await plugin_instance.execute(context)
                 else:
                     result = await plugin_instance.execute(context)
 
-            # Success
             task_ctx.finish_attempt(
                 state=AttemptStatus.SUCCESS,
                 outputs=result if isinstance(result, dict) else {},
@@ -159,6 +163,15 @@ class LocalExecutor(BaseExecutor):
             )
             task_ctx.retries = 0
 
+        except NotImplementedError as exc:
+            # Plugin not registered: a permanent failure, no point retrying.
+            task_ctx.finish_attempt(
+                state=AttemptStatus.FAILED,
+                error=str(exc),
+                error_traceback=traceback.format_exc(),
+            )
+            task_ctx.retries = 0
+
         except Exception as exc:
             task_ctx.finish_attempt(
                 state=AttemptStatus.FAILED,
@@ -167,15 +180,16 @@ class LocalExecutor(BaseExecutor):
             )
 
         finally:
-            # Always call plugin.teardown() — resource cleanup hook.
-            try:
-                await plugin_instance.teardown(context)
-            except Exception as td_exc:  # noqa: BLE001
-                logger.warning(
-                    "Plugin teardown error for %s/%s: %s",
-                    task_ctx.dag_id,
-                    task_ctx.task_id,
-                    td_exc,
-                )
+            # Teardown only if the plugin was successfully instantiated.
+            if plugin_instance is not None:
+                try:
+                    await plugin_instance.teardown(context)
+                except Exception as td_exc:  # noqa: BLE001
+                    logger.warning(
+                        "Plugin teardown error for %s/%s: %s",
+                        task_ctx.dag_id,
+                        task_ctx.task_id,
+                        td_exc,
+                    )
 
         return task_ctx
