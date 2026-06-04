@@ -8,7 +8,7 @@ A small, single-process async loop that:
      run when its cron expression is due.
 
 The scheduler shares its metadata store with the CLI — that's the IPC
-layer (see ``JsonMetadata.enqueue_trigger`` /
+layer (see ``LocalMetadata.enqueue_trigger`` /
 ``drain_triggers``). No socket, no API.
 
 Semantics
@@ -44,7 +44,7 @@ from croniter import croniter
 
 from .core.bundle import LocalBundle
 from .core.variables import VariableScope, merge_with_overrides
-from .metadata import JsonMetadata
+from .metadata import LocalMetadata
 from .models.dag import Dag
 from .runner import DagRunner
 
@@ -63,12 +63,12 @@ def _parse_iso(value: Any) -> datetime | None:
 
 
 class DeploymentScheduler:
-    """Cron + manual-trigger loop sharing JsonMetadata with the CLI."""
+    """Cron + manual-trigger loop sharing LocalMetadata with the CLI."""
 
     def __init__(
         self,
         bundle_path: str | Path,
-        meta: JsonMetadata,
+        meta: LocalMetadata,
         *,
         tick_seconds: int = 5,
         max_concurrent_runs: int = 8,

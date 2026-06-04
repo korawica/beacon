@@ -19,7 +19,7 @@ from beacon import (
 from beacon.callback import CALLBACKS_REGISTRY
 from beacon.core import TaskState
 from beacon.core.plugin import PLUGINS_REGISTRY
-from beacon.metadata import JsonMetadata
+from beacon.metadata import LocalMetadata
 
 
 # ─── inline plugins for tests ────────────────────────────────────────────
@@ -92,7 +92,7 @@ def _reset():
 
 
 def _run(dag: Dag, tmp_path: Path, **kwargs) -> dict[str, Any]:
-    meta = JsonMetadata(tmp_path / "meta")
+    meta = LocalMetadata(tmp_path / "meta")
     sched = DagRunner(dag, meta=meta)
     return asyncio.run(sched.run(**kwargs))
 
@@ -470,7 +470,7 @@ def test_upstream_outputs_flow_to_downstream(tmp_path):
 
 def test_dag_run_state_persisted_in_metadata(tmp_path):
     """DagRun state in metadata reflects scheduler outcome."""
-    meta = JsonMetadata(tmp_path / "meta")
+    meta = LocalMetadata(tmp_path / "meta")
     dag = Dag(
         id="persist",
         actions=[Task(id="t", uses="_rec", inputs={"value": "x"})],

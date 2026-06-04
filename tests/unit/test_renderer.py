@@ -7,7 +7,7 @@ import pytest
 
 from beacon import BasePlugin, Dag, DagRunner, Task
 from beacon.core import Renderer
-from beacon.metadata import JsonMetadata
+from beacon.metadata import LocalMetadata
 
 
 # ─── Renderer unit tests ─────────────────────────────────────────────────
@@ -92,7 +92,7 @@ def test_scheduler_renders_params_at_enqueue(tmp_path):
             ),
         ],
     )
-    meta = JsonMetadata(tmp_path / "meta")
+    meta = LocalMetadata(tmp_path / "meta")
     sched = DagRunner(dag, meta=meta)
     asyncio.run(sched.run(params={"src": "postgres"}))
     assert _CAPTURED["t"] == "src=postgres"
@@ -109,7 +109,7 @@ def test_scheduler_renders_vars_at_enqueue(tmp_path):
             ),
         ],
     )
-    meta = JsonMetadata(tmp_path / "meta")
+    meta = LocalMetadata(tmp_path / "meta")
     sched = DagRunner(dag, meta=meta, variables={"bucket": "my-bucket"})
     asyncio.run(sched.run())
     assert _CAPTURED["t"] == "my-bucket"
@@ -126,7 +126,7 @@ def test_scheduler_renders_runtime(tmp_path):
             ),
         ],
     )
-    sched = DagRunner(dag, meta=JsonMetadata(tmp_path / "meta"))
+    sched = DagRunner(dag, meta=LocalMetadata(tmp_path / "meta"))
     asyncio.run(sched.run())
     assert _CAPTURED["t"] == "render-runtime/t"
 
@@ -149,7 +149,7 @@ def test_worker_late_binds_upstream_outputs(tmp_path):
             ),
         ],
     )
-    sched = DagRunner(dag, meta=JsonMetadata(tmp_path / "meta"))
+    sched = DagRunner(dag, meta=LocalMetadata(tmp_path / "meta"))
     asyncio.run(sched.run())
     assert _CAPTURED["cons"] == "got=PAYLOAD"
 

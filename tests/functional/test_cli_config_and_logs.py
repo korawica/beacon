@@ -12,7 +12,7 @@ import pytest
 from click.testing import CliRunner
 
 from beacon.cli import cli
-from beacon.metadata import JsonMetadata
+from beacon.metadata import LocalMetadata
 
 
 @pytest.fixture()
@@ -63,7 +63,7 @@ def test_logs_logical_date_resolves_run_id(
 ) -> None:
     meta_path = tmp_path / "meta"
     log_dir = tmp_path / "logs"
-    meta = JsonMetadata(meta_path)
+    meta = LocalMetadata(meta_path)
 
     # Seed a DagRun with a known logical_date + a fake attempt log file.
     dag_id, task_id, run_id = (
@@ -115,7 +115,7 @@ def test_logs_logical_date_with_no_match_exits_1(
     runner: CliRunner, tmp_path: Path
 ) -> None:
     meta_path = tmp_path / "meta"
-    JsonMetadata(meta_path)  # init dirs
+    LocalMetadata(meta_path)  # init dirs
     res = runner.invoke(
         cli,
         [

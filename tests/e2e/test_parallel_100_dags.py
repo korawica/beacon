@@ -1,6 +1,6 @@
 """End-to-end test: 100 DAGs running in parallel.
 
-Validates that the JsonMetadata store handles concurrent writes/reads
+Validates that the LocalMetadata store handles concurrent writes/reads
 from 100 independent DAG runs, each with multiple tasks, without data
 corruption or performance degradation.
 """
@@ -12,7 +12,7 @@ from datetime import datetime
 import pytest
 
 from beacon.core import TaskContext, TaskState
-from beacon.metadata.json_store import JsonMetadata
+from beacon.metadata.json_store import LocalMetadata
 from beacon.worker import Worker
 
 # Ensure py plugin is registered
@@ -65,7 +65,7 @@ class TestParallel100Dags:
 
     def test_100_dags_single_task_each(self, workspace):
         """100 different DAGs each with 1 task, all submitted at once."""
-        meta = JsonMetadata(workspace["metadata"])
+        meta = LocalMetadata(workspace["metadata"])
         worker = Worker(meta, max_concurrent=50)
         py_file = str(workspace["scripts"] / "fast.py")
 
@@ -137,7 +137,7 @@ class TestParallel100Dags:
         Tasks within each DAG run sequentially (submitted after previous
         completes), but all 100 DAGs run concurrently.
         """
-        meta = JsonMetadata(workspace["metadata"])
+        meta = LocalMetadata(workspace["metadata"])
         worker = Worker(meta, max_concurrent=50)
         py_file = str(workspace["scripts"] / "multi_step.py")
 
@@ -224,7 +224,7 @@ class TestParallel100Dags:
 
     def test_metadata_isolation_across_dags(self, workspace):
         """Verify no data leaks between DAGs writing to metadata concurrently."""
-        meta = JsonMetadata(workspace["metadata"])
+        meta = LocalMetadata(workspace["metadata"])
         py_file = str(workspace["scripts"] / "fast.py")
 
         num_dags = 100
@@ -289,7 +289,7 @@ class TestParallel100Dags:
 
     def test_bulk_query_performance(self, workspace):
         """Test get_all_task_states bulk query is faster than N individual reads."""
-        meta = JsonMetadata(workspace["metadata"])
+        meta = LocalMetadata(workspace["metadata"])
 
         num_tasks = 50
         dag_id = "bulk-dag"

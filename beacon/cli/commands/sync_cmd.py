@@ -21,7 +21,7 @@ import click
 
 from ...core.bundle import LocalBundle
 from ...dryrun import dryrun as run_dryrun
-from ...metadata import JsonMetadata
+from ...metadata import LocalMetadata
 from ...models.deployment import Deployment
 from ..loader import _load_dags_from_file
 from ..settings import get
@@ -121,7 +121,7 @@ async def _roll_deployments(
     valid_dag_ids: set[str],
 ) -> tuple[list[str], list[str], list[str]]:
     """Return ``(rolled, pinned_stale, unknown_dag)`` deployment-id lists."""
-    meta = JsonMetadata(metadata_path)
+    meta = LocalMetadata(metadata_path)
     deployments = await meta.list_deployments()
     rolled: list[str] = []
     pinned_stale: list[str] = []

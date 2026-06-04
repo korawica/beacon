@@ -9,7 +9,7 @@ import pytest
 from beacon.callback import OnTaskEvent
 from beacon.providers.standard.hooks import JsonFileHook
 from beacon.core import TaskContext, TaskState
-from beacon.metadata.json_store import JsonMetadata
+from beacon.metadata.json_store import LocalMetadata
 from beacon.worker import Worker
 
 # Ensure py plugin registered
@@ -70,7 +70,7 @@ def _make_ctx(py_file: str, retries: int = 0, **params) -> TaskContext:
 
 def test_json_metadata_crud(workspace):
     """Test metadata store basic operations."""
-    meta = JsonMetadata(workspace["metadata_path"])
+    meta = LocalMetadata(workspace["metadata_path"])
 
     async def _test():
         # DagRun
@@ -138,7 +138,7 @@ def test_worker_success(workspace):
     scripts.mkdir()
     (scripts / "ok.py").write_text(USER_SCRIPT_OK)
 
-    meta = JsonMetadata(workspace["metadata_path"])
+    meta = LocalMetadata(workspace["metadata_path"])
     worker = Worker(meta, max_concurrent=2)
     task_ctx = _make_ctx(str(scripts / "ok.py"), value="hello")
 
@@ -170,7 +170,7 @@ def test_worker_with_callbacks(workspace):
     scripts.mkdir()
     (scripts / "ok.py").write_text(USER_SCRIPT_OK)
 
-    meta = JsonMetadata(workspace["metadata_path"])
+    meta = LocalMetadata(workspace["metadata_path"])
     alert_dir = str(workspace["alert_path"])
     worker = Worker(meta)
 
@@ -213,7 +213,7 @@ def test_worker_retry_flow(workspace):
     # Use a unique counter file for this test
     counter_file = str(workspace["metadata_path"] / "_counter")
 
-    meta = JsonMetadata(workspace["metadata_path"])
+    meta = LocalMetadata(workspace["metadata_path"])
     alert_dir = str(workspace["alert_path"])
     worker = Worker(meta)
 
@@ -281,7 +281,7 @@ def test_worker_final_failure(workspace):
         'def main():\n    raise RuntimeError("permanent error")\n'
     )
 
-    meta = JsonMetadata(workspace["metadata_path"])
+    meta = LocalMetadata(workspace["metadata_path"])
     alert_dir = str(workspace["alert_path"])
     worker = Worker(meta)
 

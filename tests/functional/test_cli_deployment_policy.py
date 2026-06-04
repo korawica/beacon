@@ -19,7 +19,7 @@ import pytest
 from click.testing import CliRunner
 
 from beacon.cli import cli
-from beacon.metadata import JsonMetadata
+from beacon.metadata import LocalMetadata
 
 
 DAG = """
@@ -87,7 +87,7 @@ def test_deploy_with_var_pins_and_sync_leaves_it_stale(
     assert res.exit_code == 0, res.output
 
     deps = {
-        d["id"]: d for d in asyncio.run(JsonMetadata(meta).list_deployments())
+        d["id"]: d for d in asyncio.run(LocalMetadata(meta).list_deployments())
     }
     v1 = deps["plain"]["dag_version"]
     assert deps["pinned"]["dag_version"] == v1
@@ -106,7 +106,7 @@ def test_deploy_with_var_pins_and_sync_leaves_it_stale(
     assert "rolled" in res.output
 
     deps = {
-        d["id"]: d for d in asyncio.run(JsonMetadata(meta).list_deployments())
+        d["id"]: d for d in asyncio.run(LocalMetadata(meta).list_deployments())
     }
     v2 = deps["plain"]["dag_version"]
     assert v2 != v1, "non-pinned should auto-roll"
@@ -161,7 +161,7 @@ def test_deployment_diff_and_sync_round_trip(
     runner.invoke(cli, ["sync", str(bundle), "--metadata-path", str(meta)])
 
     # Stamp v1, then bump bundle.
-    deps = asyncio.run(JsonMetadata(meta).list_deployments())
+    deps = asyncio.run(LocalMetadata(meta).list_deployments())
     v1 = deps[0]["dag_version"]
     (bundle / "dags" / "g" / "hello" / "dag.py").write_text(
         textwrap.dedent(DAG).lstrip() + "# bump\n"
@@ -202,7 +202,7 @@ def test_deployment_diff_and_sync_round_trip(
     )
     assert res.exit_code == 0, res.output
 
-    deps = asyncio.run(JsonMetadata(meta).list_deployments())
+    deps = asyncio.run(LocalMetadata(meta).list_deployments())
     v2 = deps[0]["dag_version"]
     assert v2 != v1
     assert deps[0]["variable_overrides"] == {"baz": "override"}

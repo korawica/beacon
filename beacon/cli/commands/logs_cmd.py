@@ -8,7 +8,7 @@ from pathlib import Path
 
 import click
 
-from ...metadata import JsonMetadata
+from ...metadata import LocalMetadata
 from ..settings import get
 
 
@@ -122,7 +122,7 @@ def _resolve_run_id(
     if target is None:
         click.echo(f"Bad --logical-date: {logical_date_str!r}", err=True)
         sys.exit(2)
-    meta = JsonMetadata(metadata_path)
+    meta = LocalMetadata(metadata_path)
     runs = asyncio.run(meta.list_dag_runs(dag_id=dag_id, limit=1000))
     for r in runs:
         ld = r.get("logical_date")

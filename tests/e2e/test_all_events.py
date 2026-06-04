@@ -24,7 +24,7 @@ import pytest
 
 from beacon.callback import OnTaskEvent
 from beacon.core import TaskContext, TaskState
-from beacon.metadata.json_store import JsonMetadata
+from beacon.metadata.json_store import LocalMetadata
 from beacon.worker import Worker
 
 # Ensure py plugin is registered
@@ -141,7 +141,7 @@ class TestAllCallbackEvents:
 
     def test_long_running_task_fires_start_and_success(self, workspace):
         """A 3-second task fires 'start' then 'success'."""
-        meta = JsonMetadata(workspace["metadata"])
+        meta = LocalMetadata(workspace["metadata"])
         alert_dir = str(workspace["alerts"])
         worker = Worker(meta, max_concurrent=5)
 
@@ -191,7 +191,7 @@ class TestAllCallbackEvents:
 
     def test_retry_task_fires_start_retry_retry_start_success(self, workspace):
         """Task that fails 2x then succeeds fires: start, retry, start, retry, start, success."""
-        meta = JsonMetadata(workspace["metadata"])
+        meta = LocalMetadata(workspace["metadata"])
         alert_dir = str(workspace["alerts"])
         worker = Worker(meta, max_concurrent=5)
 
@@ -249,7 +249,7 @@ class TestAllCallbackEvents:
 
     def test_permanent_failure_fires_start_and_failure(self, workspace):
         """Task with 1 retry that always fails fires: start, retry, start, failure."""
-        meta = JsonMetadata(workspace["metadata"])
+        meta = LocalMetadata(workspace["metadata"])
         alert_dir = str(workspace["alerts"])
         worker = Worker(meta, max_concurrent=5)
 
@@ -301,7 +301,7 @@ class TestAllCallbackEvents:
 
     def test_no_retry_immediate_failure(self, workspace):
         """Task with 0 retries fires: start, failure."""
-        meta = JsonMetadata(workspace["metadata"])
+        meta = LocalMetadata(workspace["metadata"])
         alert_dir = str(workspace["alerts"])
         worker = Worker(meta, max_concurrent=5)
 
@@ -336,7 +336,7 @@ class TestAllCallbackEvents:
 
     def test_callback_data_contains_error_on_failure(self, workspace):
         """Failure callback includes error details."""
-        meta = JsonMetadata(workspace["metadata"])
+        meta = LocalMetadata(workspace["metadata"])
         alert_dir = str(workspace["alerts"])
         worker = Worker(meta, max_concurrent=5)
 
@@ -367,7 +367,7 @@ class TestAllCallbackEvents:
 
     def test_callback_data_contains_outputs_on_success(self, workspace):
         """Success callback includes task outputs."""
-        meta = JsonMetadata(workspace["metadata"])
+        meta = LocalMetadata(workspace["metadata"])
         alert_dir = str(workspace["alerts"])
         worker = Worker(meta, max_concurrent=5)
 
@@ -398,7 +398,7 @@ class TestConcurrentExecution:
 
     def test_multiple_tasks_all_complete(self, workspace):
         """Multiple tasks submitted to worker all complete successfully."""
-        meta = JsonMetadata(workspace["metadata"])
+        meta = LocalMetadata(workspace["metadata"])
         alert_dir = str(workspace["alerts"])
         worker = Worker(meta, max_concurrent=5)
 

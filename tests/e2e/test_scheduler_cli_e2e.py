@@ -56,11 +56,11 @@ def test_deploy_trigger_scheduler_run_then_list(
     # 5. Drive ONE scheduler tick. We do this in-process via the module
     # so we don't need a subprocess.
     import asyncio
-    from beacon.metadata import JsonMetadata
+    from beacon.metadata import LocalMetadata
     from beacon.scheduler import DeploymentScheduler
 
     async def drive() -> None:
-        sched = DeploymentScheduler(bundle, JsonMetadata(meta))
+        sched = DeploymentScheduler(bundle, LocalMetadata(meta))
         sched.reload()
         await sched._tick()
         if sched._tasks:

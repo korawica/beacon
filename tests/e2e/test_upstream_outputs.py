@@ -10,7 +10,7 @@ from datetime import datetime
 import pytest
 
 from beacon.core import TaskContext, TaskState
-from beacon.metadata.json_store import JsonMetadata
+from beacon.metadata.json_store import LocalMetadata
 from beacon.worker import Worker
 from beacon.providers.standard.plugins.task.python import PythonPlugin  # noqa: F401
 
@@ -82,7 +82,7 @@ def _ctx(task_id: str, py_file: str) -> TaskContext:
 
 def test_upstream_outputs_available_in_downstream(workspace):
     """Downstream task can read upstream task outputs via load_context()."""
-    meta = JsonMetadata(workspace["metadata"])
+    meta = LocalMetadata(workspace["metadata"])
     worker = Worker(meta, max_concurrent=5)
 
     extract_ctx = _ctx("extract", str(workspace["scripts"] / "extract.py"))
@@ -179,7 +179,7 @@ def test_upstream_outputs_available_in_downstream(workspace):
 
 def test_empty_upstream_outputs_when_no_upstream(workspace):
     """Task with no upstream has empty upstream_outputs."""
-    meta = JsonMetadata(workspace["metadata"])
+    meta = LocalMetadata(workspace["metadata"])
     worker = Worker(meta, max_concurrent=5)
 
     extract_ctx = _ctx("extract", str(workspace["scripts"] / "extract.py"))

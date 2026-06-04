@@ -79,7 +79,7 @@ class Dag(BaseModel):
             auto-resolved. Explicit ``variables=`` always wins.
         """
         from ..dryrun import dryrun as _dryrun
-        from ..metadata.json_store import JsonMetadata
+        from ..metadata.json_store import LocalMetadata
         from ..runner import DagRunner
 
         # Auto-resolve scoped variables if available and not overridden.
@@ -110,7 +110,7 @@ class Dag(BaseModel):
 
             metadata_path = tempfile.mkdtemp(prefix="beacon_run_")
 
-        meta = JsonMetadata(metadata_path)
+        meta = LocalMetadata(metadata_path)
         scheduler = DagRunner(
             self,
             meta=meta,
@@ -171,10 +171,10 @@ class Dag(BaseModel):
             dag.clear(run_id="run-abc", task_id="task2",
                       downstream=True, metadata_path="./meta")  # fix + rerun
         """
-        from ..metadata.json_store import JsonMetadata
+        from ..metadata.json_store import LocalMetadata
         from ..runner import DagRunner
 
-        meta = JsonMetadata(metadata_path)
+        meta = LocalMetadata(metadata_path)
         runner = DagRunner(self, meta=meta, max_concurrent=max_concurrent)
 
         async def _clear_and_run() -> tuple[list[str], Any]:
@@ -243,7 +243,7 @@ class Dag(BaseModel):
                      metadata_path="./meta")
         """
         from ..core.state import TaskState
-        from ..metadata.json_store import JsonMetadata
+        from ..metadata.json_store import LocalMetadata
         from ..runner import DagRunner
 
         valid_states = {"failed", "success", "skipped"}
@@ -253,7 +253,7 @@ class Dag(BaseModel):
             )
         target_state = TaskState(state)
 
-        meta = JsonMetadata(metadata_path)
+        meta = LocalMetadata(metadata_path)
         runner = DagRunner(self, meta=meta, max_concurrent=max_concurrent)
 
         async def _mark_and_resume():
@@ -332,7 +332,7 @@ class Dag(BaseModel):
         """
         from croniter import croniter
 
-        from ..metadata.json_store import JsonMetadata
+        from ..metadata.json_store import LocalMetadata
         from ..runner import DagRunner, _build_graph
 
         if end_date < start_date:
@@ -340,7 +340,7 @@ class Dag(BaseModel):
                 f"end_date {end_date} is before start_date {start_date}"
             )
 
-        meta = JsonMetadata(metadata_path)
+        meta = LocalMetadata(metadata_path)
         runner = DagRunner(
             self,
             meta=meta,

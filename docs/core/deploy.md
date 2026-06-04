@@ -72,8 +72,8 @@ my-team-repo/
  │   ├── actions/                         # Custom action types (e.g. `uses: gcs_extract`)
  │   │   ├── gcs_extract.py
  │   │   └── bigquery_load.py
- │   └── callbacks/                       # Custom callbacks (e.g. `on_event: failure, hook: ms_team`)
- │       └── ms_team.py
+ │   └── callbacks/                       # Custom callbacks (e.g. `on_event: failure, hook: json-file`)
+ │       └── json_file.py
  └── assets/                              # bundle-global files for `uses: py`
      ├── transform.py
      └── validate.py
@@ -153,19 +153,25 @@ Each file is a flat key→value mapping. There is no `stages:` block.
 
 ```yaml
 # dags/global_variables.yml — bundle-wide defaults
-gcp_project: my-project
-dataset:     raw
-alert_path:  /var/beacon/alerts
+stages:
+  prod:
+    gcp_project: my-project
+    dataset:     raw
+    alert_path:  /var/beacon/alerts
 ```
 
 ```yaml
 # dags/sales/global_variables.yml — overrides for every DAG in sales/
-dataset: sales_raw
+stages:
+  prod:
+    dataset: sales_raw
 ```
 
 ```yaml
 # dags/sales/extract_load_table/variables.yml — overrides for this DAG
-alert_path: /var/beacon/alerts/sales-extract
+stages:
+  prod:
+    alert_path: /var/beacon/alerts/sales-extract
 ```
 
 At trigger time, `vars('dataset')` for `extract-load-table` resolves
@@ -200,8 +206,8 @@ class GcsExtractPlugin(BasePlugin):
     prefix: str
 
     async def execute(self, context: Context) -> dict[str, Any]:
-        from google.cloud import storage
-        client = storage.Client()
+        from google.cloud.storage import Client
+        client = Client()
         blobs = list(client.list_blobs(self.bucket, prefix=self.prefix))
         if not blobs:
             raise TaskFailed(
@@ -236,7 +242,26 @@ LOWEST PRECEDENCE │ dags/global_variables.yml               │
   is bound to the DagRun. Re-deploying after a run is in-flight does
   not perturb that run.
 - A missing key renders as `<unresolved: vars('name')>` (same
-  behaviour as today's `Renderer`).
+  behavior as today's `Renderer`).
+
+---
+
+## Plan & Validation
+
+You can plan a DAG with a specific param + variable set without creating a
+Deployment.
+
+```bash
+beacon dryrun \
+  --dag-id extract-load-table \
+  --timezone Asia/Bangkok \
+  --param source_system=postgres \
+  --param target_table=customers \
+  --var alert_path=/var/beacon/alerts/orders-oncall
+```
+
+I will return the rendered action graph, with all variables and parameters
+resolved.
 
 ---
 

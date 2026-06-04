@@ -26,7 +26,7 @@ import pytest
 
 from beacon import BasePlugin, Dag, DagRunner, Task
 from beacon.core.state import TaskState
-from beacon.metadata import JsonMetadata
+from beacon.metadata import LocalMetadata
 
 
 _EVENTS: list[str] = []
@@ -93,7 +93,7 @@ def _spark_dag() -> Dag:
 
 def test_normal_run_baseline(tmp_path):
     dag = _spark_dag()
-    runner = DagRunner(dag, meta=JsonMetadata(tmp_path / "m"))
+    runner = DagRunner(dag, meta=LocalMetadata(tmp_path / "m"))
     result = asyncio.run(runner.run(run_id="manual-spark-fail-1"))
     assert result.state == "success"
     assert _EVENTS == [
@@ -110,7 +110,7 @@ def test_normal_run_baseline(tmp_path):
 
 def test_force_fail_process_fires_teardown(tmp_path):
     dag = _spark_dag()
-    meta = JsonMetadata(tmp_path / "m")
+    meta = LocalMetadata(tmp_path / "m")
     runner = DagRunner(dag, meta=meta)
 
     # Initial run — all success.

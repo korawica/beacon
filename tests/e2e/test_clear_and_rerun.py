@@ -15,7 +15,7 @@ import pytest
 
 from beacon import BasePlugin, Dag, DagRunner, Task
 from beacon.core.state import TaskState
-from beacon.metadata import JsonMetadata
+from beacon.metadata import LocalMetadata
 
 
 # --- Counter plugins ------------------------------------------------------
@@ -84,7 +84,7 @@ def _make_pipeline_dag() -> Dag:
 
 def test_initial_run_executes_each_task_once(tmp_path):
     dag = _make_pipeline_dag()
-    meta = JsonMetadata(tmp_path / "meta")
+    meta = LocalMetadata(tmp_path / "meta")
     runner = DagRunner(dag, meta=meta)
 
     result = asyncio.run(runner.run(run_id="run-week-1"))
@@ -105,7 +105,7 @@ def test_initial_run_executes_each_task_once(tmp_path):
 
 def test_clear_task_with_downstream_and_resume(tmp_path):
     dag = _make_pipeline_dag()
-    meta = JsonMetadata(tmp_path / "meta")
+    meta = LocalMetadata(tmp_path / "meta")
     runner = DagRunner(dag, meta=meta)
 
     # Initial run — last week.
@@ -156,7 +156,7 @@ def test_clear_task_with_downstream_and_resume(tmp_path):
 
 def test_clear_single_task_no_downstream(tmp_path):
     dag = _make_pipeline_dag()
-    meta = JsonMetadata(tmp_path / "meta")
+    meta = LocalMetadata(tmp_path / "meta")
     runner = DagRunner(dag, meta=meta)
 
     asyncio.run(runner.run(run_id="run-week-1"))
@@ -179,7 +179,7 @@ def test_clear_single_task_no_downstream(tmp_path):
 
 def test_resume_without_clear_is_noop(tmp_path):
     dag = _make_pipeline_dag()
-    meta = JsonMetadata(tmp_path / "meta")
+    meta = LocalMetadata(tmp_path / "meta")
     runner = DagRunner(dag, meta=meta)
 
     asyncio.run(runner.run(run_id="run-week-1"))
@@ -197,7 +197,7 @@ def test_resume_without_clear_is_noop(tmp_path):
 
 def test_resume_unknown_run_raises(tmp_path):
     dag = _make_pipeline_dag()
-    runner = DagRunner(dag, meta=JsonMetadata(tmp_path / "meta"))
+    runner = DagRunner(dag, meta=LocalMetadata(tmp_path / "meta"))
 
     with pytest.raises(ValueError, match="no DagRun"):
         asyncio.run(runner.run(run_id="never-existed", resume=True))
@@ -210,7 +210,7 @@ def test_resume_unknown_run_raises(tmp_path):
 
 def test_clear_unknown_task_raises(tmp_path):
     dag = _make_pipeline_dag()
-    meta = JsonMetadata(tmp_path / "meta")
+    meta = LocalMetadata(tmp_path / "meta")
     runner = DagRunner(dag, meta=meta)
     asyncio.run(runner.run(run_id="run-week-1"))
 
@@ -245,7 +245,7 @@ def test_resume_uses_original_params_not_new(tmp_path):
             ),
         ],
     )
-    meta = JsonMetadata(tmp_path / "meta")
+    meta = LocalMetadata(tmp_path / "meta")
     runner = DagRunner(dag, meta=meta)
 
     # Initial run with params={"which": "original"}.
@@ -301,7 +301,7 @@ def test_backfill_multiple_runs(tmp_path):
     discover task2 had a bug. Clear & rerun task2+task3 in each historic
     run. task1 must NEVER re-execute."""
     dag = _make_pipeline_dag()
-    meta = JsonMetadata(tmp_path / "meta")
+    meta = LocalMetadata(tmp_path / "meta")
     runner = DagRunner(dag, meta=meta)
 
     run_ids = []

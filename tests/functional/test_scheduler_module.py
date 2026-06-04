@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 
-from beacon.metadata import JsonMetadata
+from beacon.metadata import LocalMetadata
 from beacon.scheduler import DeploymentScheduler
 
 
@@ -44,7 +44,7 @@ async def _drive(sched: DeploymentScheduler, *, ticks: int) -> None:
 
 def test_manual_trigger_fires_a_dag_run(tmp_path: Path) -> None:
     bundle = _write_bundle(tmp_path)
-    meta = JsonMetadata(tmp_path / "m")
+    meta = LocalMetadata(tmp_path / "m")
 
     async def go() -> None:
         await meta.upsert_deployment({"id": "d1", "dag_id": "hello"})
@@ -64,7 +64,7 @@ def test_unknown_deployment_trigger_is_skipped_not_fatal(
     tmp_path: Path,
 ) -> None:
     bundle = _write_bundle(tmp_path)
-    meta = JsonMetadata(tmp_path / "m")
+    meta = LocalMetadata(tmp_path / "m")
 
     async def go() -> None:
         await meta.enqueue_trigger("ghost", params={})
@@ -77,7 +77,7 @@ def test_unknown_deployment_trigger_is_skipped_not_fatal(
 
 def test_unknown_dag_is_skipped_not_fatal(tmp_path: Path) -> None:
     bundle = _write_bundle(tmp_path)
-    meta = JsonMetadata(tmp_path / "m")
+    meta = LocalMetadata(tmp_path / "m")
 
     async def go() -> None:
         # Deployment references a dag id that the bundle doesn't have.
@@ -97,7 +97,7 @@ def test_cron_due_fires_and_advances_bookkeeping(tmp_path: Path) -> None:
     """A cron whose next tick is in the past must fire exactly once and
     persist ``last_scheduled_at`` so the next tick is in the future."""
     bundle = _write_bundle(tmp_path)
-    meta = JsonMetadata(tmp_path / "m")
+    meta = LocalMetadata(tmp_path / "m")
 
     async def go() -> None:
         await meta.upsert_deployment(
@@ -126,7 +126,7 @@ def test_cron_due_fires_and_advances_bookkeeping(tmp_path: Path) -> None:
 
 def test_cron_not_due_does_not_fire(tmp_path: Path) -> None:
     bundle = _write_bundle(tmp_path)
-    meta = JsonMetadata(tmp_path / "m")
+    meta = LocalMetadata(tmp_path / "m")
 
     async def go() -> None:
         await meta.upsert_deployment(
@@ -147,7 +147,7 @@ def test_cron_not_due_does_not_fire(tmp_path: Path) -> None:
 
 def test_disabled_deployment_skipped(tmp_path: Path) -> None:
     bundle = _write_bundle(tmp_path)
-    meta = JsonMetadata(tmp_path / "m")
+    meta = LocalMetadata(tmp_path / "m")
 
     async def go() -> None:
         await meta.upsert_deployment(
@@ -170,7 +170,7 @@ def test_disabled_deployment_skipped(tmp_path: Path) -> None:
 
 def test_end_date_stops_scheduling(tmp_path: Path) -> None:
     bundle = _write_bundle(tmp_path)
-    meta = JsonMetadata(tmp_path / "m")
+    meta = LocalMetadata(tmp_path / "m")
 
     async def go() -> None:
         await meta.upsert_deployment(
@@ -192,7 +192,7 @@ def test_end_date_stops_scheduling(tmp_path: Path) -> None:
 
 def test_bad_cron_logs_and_does_not_crash(tmp_path: Path) -> None:
     bundle = _write_bundle(tmp_path)
-    meta = JsonMetadata(tmp_path / "m")
+    meta = LocalMetadata(tmp_path / "m")
 
     async def go() -> None:
         await meta.upsert_deployment(
@@ -217,7 +217,7 @@ def test_in_flight_deployment_skips_overlapping_tick(tmp_path: Path) -> None:
     """If a deployment's previous run hasn't finished, a same-tick fire
     is dropped (no queue). We simulate by pre-marking _in_flight."""
     bundle = _write_bundle(tmp_path)
-    meta = JsonMetadata(tmp_path / "m")
+    meta = LocalMetadata(tmp_path / "m")
 
     async def go() -> None:
         await meta.upsert_deployment({"id": "d1", "dag_id": "hello"})
@@ -235,7 +235,7 @@ def test_in_flight_deployment_skips_overlapping_tick(tmp_path: Path) -> None:
 
 def test_run_loop_exits_on_stop(tmp_path: Path) -> None:
     bundle = _write_bundle(tmp_path)
-    meta = JsonMetadata(tmp_path / "m")
+    meta = LocalMetadata(tmp_path / "m")
 
     async def go() -> None:
         sched = DeploymentScheduler(bundle, meta, tick_seconds=10)

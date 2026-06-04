@@ -20,7 +20,7 @@ import click
 
 from ...core.bundle import LocalBundle
 from ...core.variables import merge_with_overrides
-from ...metadata import JsonMetadata
+from ...metadata import LocalMetadata
 from ...models.deployment import Deployment
 from ..loader import _load_dags_from_file
 from ..settings import get
@@ -34,8 +34,8 @@ def deployment_cmd() -> None:
 # --- shared helpers -------------------------------------------------------
 
 
-def _load_meta(metadata_path: str | None) -> JsonMetadata:
-    return JsonMetadata(metadata_path or get("BEACON_METADATA_PATH"))
+def _load_meta(metadata_path: str | None) -> LocalMetadata:
+    return LocalMetadata(metadata_path or get("BEACON_METADATA_PATH"))
 
 
 def _load_bundle(bundle_path: str) -> LocalBundle:
@@ -121,7 +121,7 @@ def deployment_sync(
 
 
 async def _apply_sync(
-    meta: JsonMetadata, deployment_ids: list[str], new_version: str
+    meta: LocalMetadata, deployment_ids: list[str], new_version: str
 ) -> None:
     for did in deployment_ids:
         raw = await meta.get_deployment(did)

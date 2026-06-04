@@ -6,7 +6,7 @@ import logging
 import click
 
 from ...logging import configure_logging
-from ...metadata import JsonMetadata
+from ...metadata import LocalMetadata
 from ...scheduler import DeploymentScheduler
 from ..settings import get
 
@@ -48,7 +48,7 @@ def scheduler(
         "starting scheduler with bundle=%s", path
     )
 
-    meta = JsonMetadata(metadata_path or get("BEACON_METADATA_PATH"))
+    meta = LocalMetadata(metadata_path or get("BEACON_METADATA_PATH"))
     sched = DeploymentScheduler(
         path,
         meta,

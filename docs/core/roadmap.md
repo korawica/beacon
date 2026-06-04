@@ -117,7 +117,7 @@ secrets adapter, audit log.
 |---------------------------------------------------------------------------------------------|----------|------------------------------------------------------|
 | Callback system with registry resolution                                                    | ✅        | Callback parity Python/YAML                          |
 | Async worker with retry scheduling                                                          | ✅        | Full lifecycle transitions                           |
-| `MetadataProtocol` + `JsonMetadata` (sharded)                                               | ✅        | Pluggable persistence, 1000+ DAGs                    |
+| `MetadataProtocol` + `LocalMetadata` (sharded)                                               | ✅        | Pluggable persistence, 1000+ DAGs                    |
 | `TaskFailed` / `TaskSkipped` exception support                                              | ✅        | Plugin-driven retry/skip control                     |
 | `Deployment` model (reusable DAG + per-env config)                                          | ✅        | DAG reuse without duplication                        |
 | `Dag.run()` / `Dag.test()` / `Dag.dryrun()` methods                                         | ✅        | Developer workflow (validate → test → run)           |
@@ -233,7 +233,7 @@ adapter — both can be re-evaluated on concrete user request.
 
 ### 5.3 — `SqliteMetadata` (single-node persistence)
 
-Replaces `JsonMetadata` as the default for `beacon serve`.
+Replaces `LocalMetadata` as the default for `beacon serve`.
 
 **Schema (5 tables):**
 
@@ -247,10 +247,10 @@ CREATE TABLE task_context (run_id, dag_id, task_id, json);
 
 **DoD checklist:**
 - [ ] Implements `MetadataProtocol` 1:1; passes the same test suite as
-      `JsonMetadata`.
+      `LocalMetadata`.
 - [ ] WAL mode enabled, `synchronous=NORMAL`, single writer pattern.
 - [ ] In-process connection pool; async via `asyncio.to_thread`.
-- [ ] Migration script: `JsonMetadata` → `SqliteMetadata` (one-shot).
+- [ ] Migration script: `LocalMetadata` → `SqliteMetadata` (one-shot).
 - [ ] Bench: 1000 DAGs × 10 tasks × 100 runs schedules in < 30 s on a
       laptop; sustained ≥ 200 task transitions/s.
 - [ ] `kill -9` mid-write leaves DB readable on restart (atomicity).

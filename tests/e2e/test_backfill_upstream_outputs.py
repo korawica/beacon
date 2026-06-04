@@ -14,7 +14,7 @@ from datetime import datetime
 import pytest
 
 from beacon.core import TaskContext, TaskState
-from beacon.metadata.json_store import JsonMetadata
+from beacon.metadata.json_store import LocalMetadata
 from beacon.worker import Worker
 from beacon.providers.standard.plugins.task.python import PythonPlugin  # noqa: F401
 
@@ -88,7 +88,7 @@ class TestBackfillUpstreamOutputs:
         This simulates: task1 ran on day1 and produced result=X.
         We want to re-run task2 only — it should still see result=X.
         """
-        meta = JsonMetadata(workspace["metadata"])
+        meta = LocalMetadata(workspace["metadata"])
         run_id = "run-day1"
         day1 = datetime(2026, 6, 1)
 
@@ -161,7 +161,7 @@ class TestBackfillUpstreamOutputs:
         """When backfilling both task1 and task2, task1 produces a new random
         value and task2 uses that new value.
         """
-        meta = JsonMetadata(workspace["metadata"])
+        meta = LocalMetadata(workspace["metadata"])
         run_id = "run-day1"
         day1 = datetime(2026, 6, 1)
 
@@ -218,7 +218,7 @@ class TestBackfillUpstreamOutputs:
         """Each day's run has independent outputs. Backfilling task2 for day1
         uses day1's task1 output, not day2's.
         """
-        meta = JsonMetadata(workspace["metadata"])
+        meta = LocalMetadata(workspace["metadata"])
         day1 = datetime(2026, 6, 1)
         day2 = datetime(2026, 6, 2)
 

@@ -9,7 +9,7 @@ import pytest
 from click.testing import CliRunner
 
 from beacon.cli import cli
-from beacon.metadata import JsonMetadata
+from beacon.metadata import LocalMetadata
 
 
 def _write_attempt(
@@ -161,7 +161,7 @@ def test_resolve_run_id_by_logical_date(
 ) -> None:
     meta_path = tmp_path / "m"
     log_dir = tmp_path / "logs"
-    meta = JsonMetadata(meta_path)
+    meta = LocalMetadata(meta_path)
     asyncio.run(
         meta.create_dag_run(
             run_id="r-2026-06-01",

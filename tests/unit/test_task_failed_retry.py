@@ -21,7 +21,7 @@ from beacon.core import BasePlugin, Context
 from beacon.core.state import TaskState
 from beacon.core.task_context import AttemptStatus, TaskContext
 from beacon.errors import TaskFailed, TaskSkipped
-from beacon.metadata.json_store import JsonMetadata
+from beacon.metadata.json_store import LocalMetadata
 from beacon.worker import Worker
 
 
@@ -140,7 +140,7 @@ def reset_counters():
 
 @pytest.fixture
 def metadata(tmp_path):
-    return JsonMetadata(tmp_path / "metadata.db")
+    return LocalMetadata(tmp_path / "metadata.db")
 
 
 def _make_ctx(

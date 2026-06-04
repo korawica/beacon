@@ -5,7 +5,7 @@ import sys
 
 import click
 
-from ...metadata import JsonMetadata
+from ...metadata import LocalMetadata
 from ..loader import load_dags
 from ..settings import get
 
@@ -44,7 +44,7 @@ def list_deployments(
     metadata_path: str | None, bundle_path: str | None
 ) -> None:
     """List every Deployment in metadata."""
-    meta = JsonMetadata(metadata_path or get("BEACON_METADATA_PATH"))
+    meta = LocalMetadata(metadata_path or get("BEACON_METADATA_PATH"))
     deps = asyncio.run(meta.list_deployments())
     if not deps:
         click.echo("(no deployments)")
@@ -84,7 +84,7 @@ def list_runs(
     dag_id: str | None, limit: int, metadata_path: str | None
 ) -> None:
     """List recent DAG runs, newest first."""
-    meta = JsonMetadata(metadata_path or get("BEACON_METADATA_PATH"))
+    meta = LocalMetadata(metadata_path or get("BEACON_METADATA_PATH"))
     runs = asyncio.run(meta.list_dag_runs(dag_id=dag_id, limit=limit))
     if not runs:
         click.echo("(no runs)")

@@ -19,7 +19,7 @@ import pytest
 
 from beacon import BasePlugin, Dag, DagRunner, Task
 from beacon.runner import run_trigger
-from beacon.metadata import JsonMetadata
+from beacon.metadata import LocalMetadata
 
 
 # --- a fake "spark cluster" so we can observe lifecycle events --------------
@@ -108,7 +108,7 @@ def _make_spark_dag() -> Dag:
 
 def test_initial_run_fires_full_lifecycle(tmp_path):
     dag = _make_spark_dag()
-    runner = DagRunner(dag, meta=JsonMetadata(tmp_path / "meta"))
+    runner = DagRunner(dag, meta=LocalMetadata(tmp_path / "meta"))
     result = asyncio.run(runner.run(run_id="manual-spark-pipeline-week1"))
 
     assert result.state == "success"
@@ -126,7 +126,7 @@ def test_initial_run_fires_full_lifecycle(tmp_path):
 
 def test_clearing_sensor_auto_re_fires_teardown(tmp_path):
     dag = _make_spark_dag()
-    meta = JsonMetadata(tmp_path / "meta")
+    meta = LocalMetadata(tmp_path / "meta")
     runner = DagRunner(dag, meta=meta)
 
     # Original run.
@@ -174,7 +174,7 @@ def test_clearing_sensor_auto_re_fires_teardown(tmp_path):
 
 def test_clearing_setup_re_fires_teardown(tmp_path):
     dag = _make_spark_dag()
-    runner = DagRunner(dag, meta=JsonMetadata(tmp_path / "meta"))
+    runner = DagRunner(dag, meta=LocalMetadata(tmp_path / "meta"))
     asyncio.run(runner.run(run_id="manual-spark-pipeline-x"))
 
     cleared = asyncio.run(
@@ -208,7 +208,7 @@ def test_clearing_unrelated_task_does_not_touch_teardown(tmp_path):
             Task(id="downB", uses="_stop_spark", teardown="setupB"),
         ],
     )
-    meta = JsonMetadata(tmp_path / "meta")
+    meta = LocalMetadata(tmp_path / "meta")
     runner = DagRunner(dag, meta=meta)
     asyncio.run(runner.run(run_id="manual-two-brackets-x"))
 
@@ -230,7 +230,7 @@ def test_clearing_unrelated_task_does_not_touch_teardown(tmp_path):
 
 def test_clearing_teardown_alone_only_reruns_teardown(tmp_path):
     dag = _make_spark_dag()
-    runner = DagRunner(dag, meta=JsonMetadata(tmp_path / "meta"))
+    runner = DagRunner(dag, meta=LocalMetadata(tmp_path / "meta"))
     asyncio.run(runner.run(run_id="manual-spark-pipeline-y"))
 
     cleared = asyncio.run(

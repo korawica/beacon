@@ -29,7 +29,7 @@ logger = logging.getLogger("beacon.metadata")
 _CACHE_SIZE = 4096
 
 
-class JsonMetadata:
+class LocalMetadata:
     """JSON file metadata store optimized for 1000+ DAG workloads."""
 
     def __init__(self, base_path: str | Path = "./metadata.db") -> None:

@@ -9,7 +9,7 @@ scoping) and [`roadmap.md`](./roadmap.md) (status + production plan).
 
 ## 1. Positioning & Principles
 
-Beacon is a lean, async-first workflow orchestrator. Target: teams that
+_Beacon_ is a lean, async-first workflow orchestrator. Target: teams that
 need production-grade orchestration without Airflow's operational
 complexity.
 
@@ -46,7 +46,7 @@ complexity.
 
 ```text
 ┌─────────────────────────────────────────────────────────┐
-│                    USER API (Dag)                        │
+│                    USER API (Dag)                       │
 ├─────────────────────────────────────────────────────────┤
 │  dag.dryrun()     validate templates + graph            │
 │  dag.run()        one-shot execution                    │
@@ -58,12 +58,12 @@ complexity.
 └──────────────────────────┬──────────────────────────────┘
                            ▼
 ┌─────────────────────────────────────────────────────────┐
-│                  DagRunner (async)                       │
+│                  DagRunner (async)                      │
 │  run(resume=False|True), clear(...), mark(...)          │
 └──────────────────────────┬──────────────────────────────┘
                            ▼
 ┌─────────────────────────────────────────────────────────┐
-│                Worker + Executor                         │
+│                Worker + Executor                        │
 │  Worker: queue → resolve upstream outputs → dispatch    │
 │  LocalExecutor.run_task():                              │
 │    try:    plugin.execute(context)                      │
@@ -71,18 +71,18 @@ complexity.
 └──────────────────────────┬──────────────────────────────┘
                            ▼
 ┌─────────────────────────────────────────────────────────┐
-│             Plugin (BasePlugin)                          │
+│             Plugin (BasePlugin)                         │
 │  execute(context) → dict     abstractmethod             │
 │  teardown(context) → None    default no-op              │
 └──────────────────────────┬──────────────────────────────┘
                            ▼
-┌─────────────────────────────────────────────────────────┐
-│             Metadata Store (JsonMetadata)                │
-│  Sharded JSON, async I/O, LRU cache, atomic writes      │
+┌──────────────────────────────────────────────────────────┐
+│             Metadata Store (LocalMetadata)                │
+│  Sharded JSON, async I/O, LRU cache, atomic writes       │
 │    {path}/dag_runs/{dag_id}/{run_id}.json                │
 │    {path}/task_contexts/{dag_id}/{run_id}/{task_id}.json │
 │    {path}/task_states/{dag_id}/{run_id}/{task_id}.json   │
-└─────────────────────────────────────────────────────────┘
+└──────────────────────────────────────────────────────────┘
 ```
 
 ### Phase 2 — Production Service (planned)
@@ -104,13 +104,13 @@ Scheduler ──enqueue──> Queue ──> Worker ──> Executor
 
 Component matrix:
 
-| Component        | Phase 1                  | Phase 2 (planned)         |
-|------------------|--------------------------|---------------------------|
-| Metadata         | `JsonMetadata`           | `SqliteMetadata` (default)|
-| Executor         | `LocalExecutor`          | + `DockerExecutor` (P3)   |
-| Queue            | `asyncio.Queue`          | `asyncio.Queue` / Redis   |
-| Scheduling       | `DagRunner` only         | + `DeploymentScheduler`   |
-| Process          | `dag.run()` in-process   | `beacon serve`            |
+| Component        | Phase 1                | Phase 2 (planned)          |
+|------------------|------------------------|----------------------------|
+| Metadata         | `LocalMetadata`        | `SqliteMetadata` (default) |
+| Executor         | `LocalExecutor`        | + `DockerExecutor` (P3)    |
+| Queue            | `asyncio.Queue`        | `asyncio.Queue` / Redis    |
+| Scheduling       | `DagRunner` only       | + `DeploymentScheduler`    |
+| Process          | `dag.run()` in-process | `beacon serve`             |
 
 ---
 
@@ -118,10 +118,13 @@ Component matrix:
 
 ```text
 Plugin ──── execution logic (execute + teardown)
+   │
    ▼
 Action ──── references a plugin via `uses`, provides `inputs`
+   │
    ▼         types: Task, Sensor, Branch, ShortCircuit, Group
 Dag ──────── reusable template: actions + deps + params + callbacks
+   │
    ▼
 Deployment ─ binds a Dag to: cron + tz + params + variable_overrides
              N Deployments → 1 Dag
@@ -211,7 +214,7 @@ uses: "gcs-extract"              → ./plugins/gcs_extract.py
 uses: "my-org/etl@1.2.0"         → remote (future)
 ```
 
-### Error signalling (controls retry)
+### Error Signaling (controls retry)
 
 | Raises          | Behavior                             | Use case                           |
 |-----------------|--------------------------------------|------------------------------------|
@@ -233,10 +236,10 @@ async def execute(self, context: Context) -> dict:
 
 ### Two ways to add logic
 
-| Pattern        | When                                | How                              |
-|----------------|-------------------------------------|----------------------------------|
-| `uses: py`     | One-off function, no reuse          | Write `main()` in a `.py` file   |
-| Custom plugin  | Reusable across DAGs                | Subclass `BasePlugin` in `./plugins/` |
+| Pattern        | When                       | How                                   |
+|----------------|----------------------------|---------------------------------------|
+| `uses: py`     | One-off function, no reuse | Write `main()` in a `.py` file        |
+| Custom plugin  | Reusable across DAGs       | Subclass `BasePlugin` in `./plugins/` |
 
 Example `uses: py` flow:
 
@@ -267,15 +270,15 @@ def main(source: str):
 
 An action is the unit of work in a DAG. Common fields:
 
-| Field     | Type              | Description                                      |
-|-----------|-------------------|--------------------------------------------------|
-| id        | str               | Unique within the DAG                            |
+| Field     | Type              | Description                                              |
+|-----------|-------------------|----------------------------------------------------------|
+| id        | str               | Unique within the DAG                                    |
 | type      | str               | `task` / `sensor` / `branch` / `short_circuit` / `group` |
-| uses      | str               | Plugin name to execute                           |
-| inputs    | dict              | Parameters passed to the plugin (Jinja-templated)|
-| upstream  | list[str]         | Task IDs that must complete first                |
-| callbacks | list[OnTaskEvent] | Fire on `start`/`success`/`failure`/`retry`/`skipped` |
-| teardown  | str               | Marks this task as teardown for `<task_id>` (see §8) |
+| uses      | str               | Plugin name to execute                                   |
+| inputs    | dict              | Parameters passed to the plugin (Jinja-templated)        |
+| upstream  | list[str]         | Task IDs that must complete first                        |
+| callbacks | list[OnTaskEvent] | Fire on `start`/`success`/`failure`/`retry`/`skipped`    |
+| teardown  | str               | Marks this task as teardown for `<task_id>` (see §8)     |
 
 ### 5.1 Task
 
@@ -295,12 +298,12 @@ UPSTREAM_FAILED. SKIPPED → downstream SKIPPED.
 
 Waits for an external condition. Plugin runs an async poke loop.
 
-| Field               | Type | Default | Description                                   |
-|---------------------|------|---------|-----------------------------------------------|
-| check_interval      | int  | 60      | Seconds between condition checks              |
-| execution_timeout   | int  | None    | Max wait time before failing                  |
-| exponential_backoff | bool | true    | Increase interval between checks              |
-| fail_mode           | str  | soft    | `soft` = FAILED on timeout; `silent` = SKIPPED|
+| Field               | Type | Default | Description                                    |
+|---------------------|------|---------|------------------------------------------------|
+| check_interval      | int  | 60      | Seconds between condition checks               |
+| execution_timeout   | int  | None    | Max wait time before failing                   |
+| exponential_backoff | bool | true    | Increase interval between checks               |
+| fail_mode           | str  | soft    | `soft` = FAILED on timeout; `silent` = SKIPPED |
 
 ```python
 class GcsSensor(BasePlugin):
@@ -375,22 +378,22 @@ After a task completes the scheduler calls
 `action.evaluate_downstream(task_ctx, downstream_ids)` → returns
 `DownstreamDirective(schedule=[...], skip=[...])`.
 
-| Action Type    | `evaluate_downstream()` logic                          |
-|----------------|--------------------------------------------------------|
-| Task           | Schedule all downstream                                |
-| Sensor         | Schedule all downstream (condition met)                |
-| Branch         | Schedule only `outputs["branch"]` list, skip rest      |
-| ShortCircuit   | If `outputs["continue"]` is False → skip ALL downstream|
-| Group          | Not invoked — flattened at parse time                  |
+| Action Type    | `evaluate_downstream()` logic                           |
+|----------------|---------------------------------------------------------|
+| Task           | Schedule all downstream                                 |
+| Sensor         | Schedule all downstream (condition met)                 |
+| Branch         | Schedule only `outputs["branch"]` list, skip rest       |
+| ShortCircuit   | If `outputs["continue"]` is False → skip ALL downstream |
+| Group          | Not invoked — flattened at parse time                   |
 
 ### Expected outputs per action type
 
-| Action Type  | Expected output shape              | Used for                            |
-|--------------|------------------------------------|-------------------------------------|
-| Task         | `{"key": "value", ...}` (any dict) | Upstream outputs for downstream     |
-| Sensor       | `{"condition_met": True, ...}`     | Proof that condition was met        |
-| Branch       | `{"branch": ["task-a", ...]}`      | Which path to take                  |
-| ShortCircuit | `{"continue": True|False}`         | Whether to proceed                  |
+| Action Type  | Expected output shape              | Used for                        |
+|--------------|------------------------------------|---------------------------------|
+| Task         | `{"key": "value", ...}` (any dict) | Upstream outputs for downstream |
+| Sensor       | `{"condition_met": True, ...}`     | Proof that condition was met    |
+| Branch       | `{"branch": ["task-a", ...]}`      | Which path to take              |
+| ShortCircuit | `{"continue": True \| False}`      | Whether to proceed              |
 
 All outputs are stored in `TaskContext.outputs` and accessible via
 `{{ outputs.task_id.key }}` or `load_context().upstream_outputs["task_id"]`.
@@ -646,7 +649,7 @@ declares it as its teardown target.
 
 ## 9. Templating
 
-Beacon uses Jinja2 for **value interpolation only** — not control flow.
+_Beacon_ uses Jinja2 for **value interpolation only** — not control flow.
 Templates resolve to concrete values *before* a plugin runs; plugins
 never see Jinja.
 
@@ -698,12 +701,12 @@ Properties:
 
 ### Namespaces
 
-| Namespace                | When                              | What                                      |
-|--------------------------|-----------------------------------|-------------------------------------------|
-| `params.KEY`             | trigger time → enqueue            | Concrete `TaskContext.params`             |
+| Namespace                | When                              | What                                        |
+|--------------------------|-----------------------------------|---------------------------------------------|
+| `params.KEY`             | trigger time → enqueue            | Concrete `TaskContext.params`               |
 | `vars('KEY')`            | trigger time → enqueue            | Lookup into active stage of `variables.yml` |
-| `outputs.TASK_ID.KEY`    | pre-execute (worker, late-bind)   | Dict outputs returned by an upstream task |
-| `runtime.KEY`            | trigger time → enqueue            | Run identity + time (see below)           |
+| `outputs.TASK_ID.KEY`    | pre-execute (worker, late-bind)   | Dict outputs returned by an upstream task   |
+| `runtime.KEY`            | trigger time → enqueue            | Run identity + time (see below)             |
 
 `runtime.*` fields:
 
@@ -721,7 +724,7 @@ Properties:
 ### Render pipeline (two binding sites)
 
 ```text
-┌─ 1. Trigger-time render ─ beacon/runner.py: _submit_action ─────────┐
+┌─ 1. Trigger-time render ─ beacon/runner.py: _submit_action ──────────┐
 │    ctx = {params, vars, runtime, outputs={}}                         │
 │    rendered = Renderer(ctx).render(task.inputs)                      │
 │    → stored on TaskContext.inputs                                    │
@@ -734,9 +737,9 @@ Properties:
 │    - re-render task_ctx.inputs with `outputs` namespace bound        │
 │      (vars is already resolved from site 1)                          │
 │    → stored back on TaskContext.inputs, plugin instantiates          │
-├─ 3. Dryrun render ─────── beacon/dryrun.py                          │
-│    Same as site 1 but failures become `DryrunResult.warnings`.      │
-└─────────────────────────────────────────────────────────────────────┘
+├─ 3. Dryrun render ─────── beacon/dryrun.py                           │
+│    Same as site 1 but failures become `DryrunResult.warnings`.       │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 By plugin execute time, `TaskContext.inputs` is **fully concrete**.
@@ -781,16 +784,16 @@ tags:       "{{ ['a', 'b'] }}"     # list
 mixed:      "prefix-{{ x }}"  x=5  # "prefix-5" (mixed → str)
 ```
 
-| You want…                   | Write                                |
-|-----------------------------|--------------------------------------|
-| Stage variable              | `{{ vars('key') }}`                  |
-| Deployment / DAG param      | `{{ params.key }}`                   |
-| Upstream task output        | `{{ outputs.task_id.key }}`          |
-| Logical date                | `{{ runtime.logical_date }}`         |
-| Run id                      | `{{ runtime.run_id }}`               |
-| Math / coerced literal      | `{{ 1024 * 1024 }}`                  |
-| Inline default              | `{{ params.maybe or 'fallback' }}`   |
-| Jinja filter                | `{{ params.name | upper }}`          |
+| You want…                   | Write                              |
+|-----------------------------|------------------------------------|
+| Stage variable              | `{{ vars('key') }}`                |
+| Deployment / DAG param      | `{{ params.key }}`                 |
+| Upstream task output        | `{{ outputs.task_id.key }}`        |
+| Logical date                | `{{ runtime.logical_date }}`       |
+| Run id                      | `{{ runtime.run_id }}`             |
+| Math / coerced literal      | `{{ 1024 * 1024 }}`                |
+| Inline default              | `{{ params.maybe or 'fallback' }}` |
+| Jinja filter                | `{{ params.name \| upper }}`       |
 
 ### Dynamic tasks (`for_each` — Phase 3)
 
@@ -869,26 +872,26 @@ any implementing class works.
 ```python
 class MetadataProtocol(Protocol):
     async def create_dag_run(...) -> None: ...
-    async def get_dag_run(run_id, dag_id) -> dict | None: ...
-    async def update_dag_run_state(run_id, dag_id, state) -> None: ...
-    async def put_task_context(run_id, dag_id, task_id, ctx) -> None: ...
-    async def get_task_context(run_id, dag_id, task_id) -> TaskContext | None: ...
-    async def set_task_state(run_id, dag_id, task_id, state) -> None: ...
-    async def get_task_state(run_id, dag_id, task_id) -> TaskState | None: ...
-    async def get_all_task_states(run_id, dag_id) -> dict[str, TaskState]: ...
-    async def get_task_outputs(run_id, dag_id, task_id) -> dict: ...
-    async def clear_task(run_id, dag_id, task_id) -> None: ...
+    async def get_dag_run(self, run_id, dag_id) -> dict | None: ...
+    async def update_dag_run_state(self, run_id, dag_id, state) -> None: ...
+    async def put_task_context(self, run_id, dag_id, task_id, ctx) -> None: ...
+    async def get_task_context(self, run_id, dag_id, task_id) -> TaskContext | None: ...
+    async def set_task_state(self, run_id, dag_id, task_id, state) -> None: ...
+    async def get_task_state(self, run_id, dag_id, task_id) -> TaskState | None: ...
+    async def get_all_task_states(self, run_id, dag_id) -> dict[str, TaskState]: ...
+    async def get_task_outputs(self, run_id, dag_id, task_id) -> dict: ...
+    async def clear_task(self, run_id, dag_id, task_id) -> None: ...
 ```
 
 ### Implementations
 
 | Store              | Persistence               | Status / Use case                |
 |--------------------|---------------------------|----------------------------------|
-| `JsonMetadata`     | File-based (sharded JSON) | ✅ Default, dev → 1000 DAGs       |
+| `LocalMetadata`    | File-based (sharded JSON) | ✅ Default, dev → 1000 DAGs       |
 | `SqliteMetadata`   | Local SQLite              | Pending (Phase 2 default)        |
 | `PostgresMetadata` | Postgres                  | Pending (Phase 3 multi-node)     |
 
-### JsonMetadata performance
+### LocalMetadata performance
 
 - **Sharded by `dag_id`** — no flat 100k-file dirs
 - **Async I/O** via `asyncio.to_thread`
@@ -1064,23 +1067,23 @@ First debugging step when a setting "doesn't seem to apply".
 Single source of truth: `_SPEC` in
 [`beacon/cli/settings.py`](../../beacon/cli/settings.py).
 
-| Variable                                | Default          | Type | Purpose                                                                                              |
-|-----------------------------------------|------------------|------|------------------------------------------------------------------------------------------------------|
-| `BEACON_METADATA_PATH`                  | `./metadata.db`  | str  | Dir used by `JsonMetadata` for `dag_runs/`, `task_contexts/`, `task_states/`, `deployments/`, `triggers/`. |
-| `BEACON_LOG_DIR`                        | `./logs`         | str  | Root dir for JSONL logs (`{LOG_DIR}/{dag_id}/{run_id}/{task_id}/attempt_N.jsonl`). Used by `beacon logs`. |
-| `BEACON_LOG_LEVEL`                      | `INFO`           | str  | Minimum log level (`DEBUG`/`INFO`/`WARNING`/`ERROR`).                                                |
-| `BEACON_LOG_SINK`                       | `file`           | str  | `file` → `BEACON_LOG_DIR`; `memory` → in-process (testing).                                          |
-| `BEACON_LOG_BATCH_SIZE`                 | `100`            | int  | Records buffered before flush.                                                                        |
-| `BEACON_LOG_FLUSH_INTERVAL_MS`          | `500`            | int  | Max ms before buffer flushes even when not full.                                                     |
-| `BEACON_SCHEDULER_TICK_SECONDS`         | `5`              | int  | Deployment scheduler loop period.                                                                    |
-| `BEACON_SCHEDULER_MAX_CONCURRENT_RUNS`  | `8`              | int  | Hard cap on in-flight DagRuns across all deployments in one scheduler process.                       |
+| Variable                                | Default          | Type | Purpose                                                                                                     |
+|-----------------------------------------|------------------|------|-------------------------------------------------------------------------------------------------------------|
+| `BEACON_METADATA_PATH`                  | `./metadata.db`  | str  | Dir used by `LocalMetadata` for `dag_runs/`, `task_contexts/`, `task_states/`, `deployments/`, `triggers/`. |
+| `BEACON_LOG_DIR`                        | `./logs`         | str  | Root dir for JSONL logs (`{LOG_DIR}/{dag_id}/{run_id}/{task_id}/attempt_N.jsonl`). Used by `beacon logs`.   |
+| `BEACON_LOG_LEVEL`                      | `INFO`           | str  | Minimum log level (`DEBUG`/`INFO`/`WARNING`/`ERROR`).                                                       |
+| `BEACON_LOG_SINK`                       | `file`           | str  | `file` → `BEACON_LOG_DIR`; `memory` → in-process (testing).                                                 |
+| `BEACON_LOG_BATCH_SIZE`                 | `100`            | int  | Records buffered before flush.                                                                              |
+| `BEACON_LOG_FLUSH_INTERVAL_MS`          | `500`            | int  | Max ms before buffer flushes even when not full.                                                            |
+| `BEACON_SCHEDULER_TICK_SECONDS`         | `5`              | int  | Deployment scheduler loop period.                                                                           |
+| `BEACON_SCHEDULER_MAX_CONCURRENT_RUNS`  | `8`              | int  | Hard cap on in-flight DagRuns across all deployments in one scheduler process.                              |
 
 ### Per-command overrides
 
 | Env var                | Flag (where supported)                                          |
 |------------------------|-----------------------------------------------------------------|
 | `BEACON_METADATA_PATH` | `--metadata-path PATH` (`deploy`, `sync`, `list`, `trigger`, …) |
-| `BEACON_LOG_DIR`       | `--log-dir PATH` (`logs`)                                        |
+| `BEACON_LOG_DIR`       | `--log-dir PATH` (`logs`)                                       |
 
 ### Setting them
 
@@ -1142,7 +1145,7 @@ Not what env vars are for. Use:
 ┌─────────────────────────────────────────────┐
 │  Single Process (dag.run / dag.backfill)    │
 │  DagRunner + Worker + LocalExecutor         │
-│  Metadata: JsonMetadata (local files)       │
+│  Metadata: LocalMetadata (local files)       │
 │  Queue: asyncio.Queue                       │
 │  Logging: LocalFileSink (JSONL)             │
 └─────────────────────────────────────────────┘

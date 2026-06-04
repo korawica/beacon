@@ -6,7 +6,7 @@ import sys
 import click
 from croniter import croniter
 
-from ...metadata import JsonMetadata
+from ...metadata import LocalMetadata
 from ...models.deployment import Deployment
 from ..settings import get
 from ._shared import parse_kv_options
@@ -93,7 +93,7 @@ def deploy(
         owners=list(owners),
     )
 
-    meta = JsonMetadata(metadata_path or get("BEACON_METADATA_PATH"))
+    meta = LocalMetadata(metadata_path or get("BEACON_METADATA_PATH"))
     asyncio.run(meta.upsert_deployment(dep.model_dump()))
     pinned = " [pinned]" if dep.is_pinned else ""
     click.echo(

@@ -5,7 +5,7 @@ import sys
 
 import click
 
-from ...metadata import JsonMetadata
+from ...metadata import LocalMetadata
 from ..settings import get
 from ._shared import parse_kv_options
 
@@ -35,7 +35,7 @@ def trigger(
     ``beacon scheduler`` process picks it up on the next tick and spawns
     a DagRun. No API server / socket required.
     """
-    meta = JsonMetadata(metadata_path or get("BEACON_METADATA_PATH"))
+    meta = LocalMetadata(metadata_path or get("BEACON_METADATA_PATH"))
     dep = asyncio.run(meta.get_deployment(deployment_id))
     if dep is None:
         click.echo(f"Unknown deployment: {deployment_id!r}", err=True)

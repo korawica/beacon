@@ -38,7 +38,7 @@ from .core.renderer import Renderer
 from .core.state import TERMINAL_STATES, TaskState
 from .core.task_context import TaskContext
 from .core.trigger_rule import TriggerRule, evaluate_trigger_rule
-from .metadata.json_store import JsonMetadata
+from .metadata.json_store import LocalMetadata
 from .worker import Worker
 
 if TYPE_CHECKING:
@@ -157,7 +157,7 @@ class DagRunner:
     Args:
         dag: The :class:`Dag` to execute.
         meta: Metadata store. A fresh tempdir-backed
-            :class:`JsonMetadata` is created when ``None``.
+            :class:`LocalMetadata` is created when ``None``.
         executor: Per-task executor. Defaults to :class:`LocalExecutor`.
         max_concurrent: Max concurrent in-flight tasks.
     """
@@ -165,7 +165,7 @@ class DagRunner:
     def __init__(
         self,
         dag: Dag,
-        meta: JsonMetadata | None = None,
+        meta: LocalMetadata | None = None,
         executor: BaseExecutor | None = None,
         max_concurrent: int = 10,
         variables: dict[str, Any] | None = None,
@@ -182,10 +182,10 @@ class DagRunner:
         self.bundle_root = bundle_root or getattr(dag, "_bundle_root", None)
 
     @staticmethod
-    def _tempdir_meta() -> JsonMetadata:
+    def _tempdir_meta() -> LocalMetadata:
         import tempfile
 
-        return JsonMetadata(tempfile.mkdtemp(prefix="beacon_sched_"))
+        return LocalMetadata(tempfile.mkdtemp(prefix="beacon_sched_"))
 
     # --- public API ---
 

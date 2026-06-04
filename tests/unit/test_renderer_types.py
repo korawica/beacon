@@ -23,7 +23,7 @@ from pydantic import Field
 
 from beacon import BasePlugin, Dag, DagRunner, Task
 from beacon.core import Renderer
-from beacon.metadata import JsonMetadata
+from beacon.metadata import LocalMetadata
 
 
 # ---------------------------------------------------------------------------
@@ -243,7 +243,7 @@ def test_e2e_typed_plugin_receives_real_types_from_params(tmp_path):
             ),
         ],
     )
-    meta = JsonMetadata(tmp_path / "meta")
+    meta = LocalMetadata(tmp_path / "meta")
     sched = DagRunner(dag, meta=meta)
     asyncio.run(
         sched.run(
@@ -280,7 +280,7 @@ def test_e2e_false_bool_does_not_become_truthy_string(tmp_path):
             ),
         ],
     )
-    sched = DagRunner(dag, meta=JsonMetadata(tmp_path / "meta"))
+    sched = DagRunner(dag, meta=LocalMetadata(tmp_path / "meta"))
     asyncio.run(sched.run(params={"enabled": False}))
     assert _CAPTURED["t"]["enabled"] is False
 
@@ -310,7 +310,7 @@ def test_e2e_upstream_outputs_preserve_types(tmp_path):
             ),
         ],
     )
-    sched = DagRunner(dag, meta=JsonMetadata(tmp_path / "meta"))
+    sched = DagRunner(dag, meta=LocalMetadata(tmp_path / "meta"))
     asyncio.run(sched.run())
 
     got = _CAPTURED["cons"]

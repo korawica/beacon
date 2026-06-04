@@ -1,11 +1,11 @@
-"""Unit tests for JsonMetadata post-improvements."""
+"""Unit tests for LocalMetadata post-improvements."""
 
 import asyncio
 from datetime import datetime
 
 
 from beacon.core import TaskContext, TaskState
-from beacon.metadata import JsonMetadata
+from beacon.metadata import LocalMetadata
 
 
 def _ctx(task_id: str = "t1") -> TaskContext:
@@ -25,7 +25,7 @@ def _ctx(task_id: str = "t1") -> TaskContext:
 
 def test_get_missing_does_not_race_toctou(tmp_path):
     """_async_read should handle missing files without TOCTOU."""
-    meta = JsonMetadata(tmp_path)
+    meta = LocalMetadata(tmp_path)
     assert (
         asyncio.run(meta.get_task_state("missing-run", "missing-dag", "t"))
         is None
@@ -42,7 +42,7 @@ def test_lru_cache_eviction(tmp_path, monkeypatch):
     from beacon.metadata import json_store
 
     monkeypatch.setattr(json_store, "_CACHE_SIZE", 3)
-    meta = JsonMetadata(tmp_path)
+    meta = LocalMetadata(tmp_path)
 
     async def run():
         for i in range(5):
@@ -56,7 +56,7 @@ def test_lru_cache_eviction(tmp_path, monkeypatch):
 
 
 def test_get_all_task_states_is_parallel(tmp_path):
-    meta = JsonMetadata(tmp_path)
+    meta = LocalMetadata(tmp_path)
 
     async def run():
         for i in range(10):
@@ -72,7 +72,7 @@ def test_get_all_task_states_is_parallel(tmp_path):
 
 
 def test_evict_run_from_cache(tmp_path):
-    meta = JsonMetadata(tmp_path)
+    meta = LocalMetadata(tmp_path)
 
     async def run():
         await meta.set_task_state("r1", "d", "t1", TaskState.SUCCESS)
@@ -86,7 +86,7 @@ def test_evict_run_from_cache(tmp_path):
 
 
 def test_active_runs_index_updates_on_terminal(tmp_path):
-    meta = JsonMetadata(tmp_path)
+    meta = LocalMetadata(tmp_path)
 
     async def run():
         await meta.create_dag_run("r1", "d1", "v1")

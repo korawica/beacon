@@ -7,10 +7,10 @@ For full-DAG orchestration (graph traversal, branch/short-circuit
 propagation, teardown, DAG callbacks) see :mod:`beacon.runner`.
 
 Usage:
-    from beacon.metadata import JsonMetadata
+    from beacon.metadata import LocalMetadata
     from beacon.worker import Worker
 
-    meta = JsonMetadata("./metadata.db")
+    meta = LocalMetadata("./metadata.db")
     worker = Worker(meta)
     await worker.submit(task_ctx)
     await worker.run()  # blocks until shutdown()

@@ -8,7 +8,7 @@ import pytest
 from click.testing import CliRunner
 
 from beacon.cli import cli
-from beacon.metadata import JsonMetadata
+from beacon.metadata import LocalMetadata
 
 
 DAG_OK = """
@@ -68,7 +68,7 @@ def test_deploy_creates_record(runner: CliRunner, tmp_path: Path) -> None:
         ],
     )
     assert res.exit_code == 0, res.output
-    rec = asyncio.run(JsonMetadata(meta).get_deployment("d1"))
+    rec = asyncio.run(LocalMetadata(meta).get_deployment("d1"))
     assert rec["dag_id"] == "etl"
     assert rec["cron"] == "0 * * * *"
     assert rec["params"] == {"src": "pg"}
@@ -99,7 +99,7 @@ def test_deploy_upsert_preserves_scheduler_bookkeeping(
     runner: CliRunner, tmp_path: Path
 ) -> None:
     meta_path = tmp_path / "m"
-    meta = JsonMetadata(meta_path)
+    meta = LocalMetadata(meta_path)
     runner.invoke(
         cli,
         [
@@ -158,7 +158,7 @@ def test_deploy_disabled_flag(runner: CliRunner, tmp_path: Path) -> None:
         ],
     )
     assert res.exit_code == 0
-    rec = asyncio.run(JsonMetadata(meta_path).get_deployment("d"))
+    rec = asyncio.run(LocalMetadata(meta_path).get_deployment("d"))
     assert rec["enabled"] is False
 
 
@@ -270,6 +270,6 @@ def test_trigger_enqueues(runner: CliRunner, tmp_path: Path) -> None:
     assert res.exit_code == 0
     assert "trigger enqueued" in res.output
 
-    drained = asyncio.run(JsonMetadata(meta).drain_triggers("d"))
+    drained = asyncio.run(LocalMetadata(meta).drain_triggers("d"))
     assert len(drained) == 1
     assert drained[0]["params"] == {"k": "v"}

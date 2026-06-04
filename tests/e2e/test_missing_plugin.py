@@ -10,7 +10,7 @@ import asyncio
 
 
 from beacon import Dag, DagRunner, Task
-from beacon.metadata import JsonMetadata
+from beacon.metadata import LocalMetadata
 
 
 def test_missing_plugin_fails_dag_does_not_hang(tmp_path) -> None:
@@ -20,7 +20,7 @@ def test_missing_plugin_fails_dag_does_not_hang(tmp_path) -> None:
     )
 
     async def go() -> None:
-        runner = DagRunner(dag, meta=JsonMetadata(tmp_path))
+        runner = DagRunner(dag, meta=LocalMetadata(tmp_path))
         result = await asyncio.wait_for(runner.run(), timeout=10)
         assert result.state == "failed"
         from beacon.core.state import TaskState
@@ -36,7 +36,7 @@ def test_missing_plugin_does_not_retry(tmp_path) -> None:
         id="bad-plugin-noretry",
         actions=[Task(id="t", uses="nope", retries=5, retry_delay=0)],
     )
-    meta = JsonMetadata(tmp_path)
+    meta = LocalMetadata(tmp_path)
 
     async def go() -> None:
         runner = DagRunner(dag, meta=meta)
@@ -70,7 +70,7 @@ def test_buggy_executor_raising_does_not_hang(tmp_path) -> None:
 
     async def go() -> None:
         runner = DagRunner(
-            dag, meta=JsonMetadata(tmp_path), executor=BoomExecutor()
+            dag, meta=LocalMetadata(tmp_path), executor=BoomExecutor()
         )
         result = await asyncio.wait_for(runner.run(), timeout=10)
         assert result.state == "failed"

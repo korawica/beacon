@@ -1,1 +1,1 @@
-from .json_store import JsonMetadata
+from .json_store import LocalMetadata
