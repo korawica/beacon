@@ -1,26 +1,31 @@
 # Deploy Flow
 
-How to package and deploy Beacon workflows. A bundle separates **DAG templates**
-(`./dags/`) from **Deployments** (`./deployments/`) — one DAG can have many
-Deployments, each binding it to a specific cron, params, stage, and identity.
+How to package and operate Beacon workflows.
 
-See also: [Design – DAG vs Deployment](./design.md#dag-vs-deployment-reuse-model).
+**Core principle:** the bundle on disk is **code only** — DAGs, plugins,
+hooks, and supporting assets (Python files, SQL, JSON). **Deployments
+live exclusively in the metadata store** and are created/updated/deleted
+via the CLI (or, later, the API or UI). If you delete the metadata
+store, every Deployment is gone — by design.
+
+This split mirrors the [Design – DAG vs Deployment](./design.md#dag-vs-deployment-reuse-model)
+reuse model: the same DAG template can have many Deployments, each
+binding it to a different cron, params, and environment stage.
 
 ---
 
 ## Repository Structure
 
+A bundle is a directory (typically a Git repo) holding **only the assets
+the scheduler needs to load**. There is no `deployments/` folder.
+
 ```text
 my-workflow-repo/
-├── dags/                       # Reusable DAG templates
+├── dags/                       # Reusable DAG templates (.yml or .py)
 │   ├── extract_load_table.yml
 │   ├── ml_training.py
 │   └── reports/
 │       └── daily_report.yml
-├── deployments/                # Bindings of a DAG → cron + params + stage
-│   ├── daily_customers_postgres.yml
-│   ├── hourly_orders_mysql.yml
-│   └── manual_snowflake_backfill.yml
 ├── plugins/                    # Custom plugins (auto-discovered)
 │   ├── gcs_extract.py
 │   └── bigquery_load.py
@@ -30,17 +35,18 @@ my-workflow-repo/
 └── variables.yml               # Stage variables (dev / stg / prod)
 ```
 
-There is **no** per-workflow folder. DAGs and Deployments are flat collections
-referenced by `id`. A `Deployment.dag_id` resolves to a `Dag.id`.
+DAGs are a flat collection referenced by `id`. There is no per-workflow
+folder.
 
 ---
 
-## File Definitions
+## Bundle Files
 
-### DAG File (`./dags/extract_load_table.yml`)
+### DAG file (`./dags/extract_load_table.yml`)
 
-A DAG is a **template** — no schedule, no concrete params, no stage. It declares
-the params schema and the action graph.
+A DAG is a **template** — no schedule, no concrete params, no stage. It
+declares the param schema and the action graph. The same DAG file is
+identical across dev / staging / prod.
 
 ```yaml
 id: extract-load-table
@@ -90,76 +96,33 @@ callbacks:
       alert_dir: "{{ vars('alert_path') }}"
 ```
 
-### Deployment File (`./deployments/daily_customers_postgres.yml`)
+### Variables file (`./variables.yml`)
 
-A Deployment binds a DAG to a specific schedule, params, and stage. Its `id`
-is what appears in the UI's Deployments list.
-
-```yaml
-id: daily-customers-from-postgres
-dag_id: extract-load-table    # must resolve to a known Dag
-dag_version: null              # null = latest; or pin a commit SHA / tag
-
-cron: "0 2 * * *"
-timezone: Asia/Bangkok
-start_date: "2026-01-01"
-end_date: null
-catch_up: false
-enabled: true
-
-variables_ref: prod            # which stage in variables.yml to use
-
-params:
-  source_system: postgres
-  target_table: customers
-
-owners: [data-platform]
-labels:
-  domain: crm
-  tier: critical
-```
-
-A second Deployment can reuse the same DAG with different params:
-
-```yaml
-# ./deployments/hourly_orders_mysql.yml
-id: hourly-orders-from-mysql
-dag_id: extract-load-table
-cron: "0 * * * *"
-timezone: Asia/Bangkok
-variables_ref: prod
-params:
-  source_system: mysql
-  target_table: orders
-```
-
-### Variables File (`./variables.yml`)
-
-Stage variables shared across all DAGs and Deployments. The active stage is
-chosen per-Deployment via `variables_ref`.
+Stage variables shared across all DAGs. The active stage is chosen
+per-Deployment by setting `variables_ref` at `beacon deploy` time.
 
 ```yaml
 type: variable
 stages:
   dev:
     gcp_project: my-project-dev
-    dataset: raw_dev
-    alert_path: /tmp/alerts
+    dataset:     raw_dev
+    alert_path:  /tmp/alerts
   stg:
     gcp_project: my-project-stg
-    dataset: raw_stg
-    alert_path: /var/beacon/alerts
+    dataset:     raw_stg
+    alert_path:  /var/beacon/alerts
   prod:
     gcp_project: my-project-prod
-    dataset: raw_prod
-    alert_path: /var/beacon/alerts
+    dataset:     raw_prod
+    alert_path:  /var/beacon/alerts
 ```
 
-### Plugin Code (`./plugins/gcs_extract.py`)
+### Custom plugin (`./plugins/gcs_extract.py`)
 
 ```python
 from typing import ClassVar, Any
-from beacon.core import BasePlugin, Context
+from beacon import BasePlugin, Context
 from beacon.errors import TaskFailed
 
 
@@ -180,222 +143,266 @@ class GcsExtractPlugin(BasePlugin):
         return {"files_found": len(blobs)}
 ```
 
-No pip install, no provider package — drop a `.py` in `./plugins/`, the bundle
-loader registers it automatically.
+No pip install, no provider package — drop a `.py` into `./plugins/` and
+the bundle loader registers it automatically on next sync.
+
+---
+
+## Deployment Lifecycle (Metadata Store)
+
+Deployments **never** live on disk. The CLI is the editor:
+
+```bash
+# Create / update a Deployment.
+beacon deploy \
+    --id daily-customers-from-postgres \
+    --dag-id extract-load-table \
+    --cron "0 2 * * *" \
+    --timezone Asia/Bangkok \
+    --variables-ref prod \
+    --param source_system=postgres \
+    --param target_table=customers \
+    --owner data-platform
+
+# A second Deployment can reuse the same DAG with different params.
+beacon deploy \
+    --id hourly-orders-from-mysql \
+    --dag-id extract-load-table \
+    --cron "0 * * * *" \
+    --timezone Asia/Bangkok \
+    --variables-ref prod \
+    --param source_system=mysql \
+    --param target_table=orders
+
+# Inspect.
+beacon list deployments
+
+# Manually trigger a run (with optional one-off param override).
+beacon trigger daily-customers-from-postgres
+beacon trigger daily-customers-from-postgres --param target_table=customers_backfill
+```
+
+Re-running `beacon deploy --id X ...` with the same id **updates** the
+record in place. Scheduler bookkeeping (`last_scheduled_at`) is preserved
+across updates so changing a cron does not replay history.
+
+### Consequence: ephemeral by design
+
+If the metadata store is deleted (or you migrate to a fresh server),
+every Deployment is gone. **Keep your `beacon deploy ...` invocations in
+source control** — a `scripts/deploy_<env>.sh`, a Makefile target, or a
+CI step. Re-applying the script rebuilds the environment from a clean
+metadata store.
+
+```bash
+# scripts/deploy_prod.sh — checked in, run after metadata reset or
+# whenever Deployment definitions change.
+set -euo pipefail
+export BEACON_METADATA_PATH=/srv/beacon-prod/metadata
+
+beacon deploy --id daily-customers-from-postgres --dag-id extract-load-table \
+    --cron "0 2 * * *" --variables-ref prod \
+    --param source_system=postgres --param target_table=customers
+
+beacon deploy --id hourly-orders-from-mysql --dag-id extract-load-table \
+    --cron "0 * * * *" --variables-ref prod \
+    --param source_system=mysql --param target_table=orders
+```
+
+---
+
+## Sync Flow (bundle → scheduler)
+
+The scheduler loads DAGs + plugins from a bundle directory at startup
+and on `SIGHUP`. **It never reads deployments from disk**; it polls the
+metadata store on every tick.
+
+```text
+┌────────────┐    git pull     ┌──────────────┐
+│  Git repo  │ ──────────────► │ ./my-bundle/ │
+└────────────┘                 │   dags/      │
+                               │   plugins/   │
+                               │   scripts/   │
+                               └──────┬───────┘
+                                      │ beacon sync       (validate)
+                                      │ beacon scheduler PATH  (run)
+                                      ▼
+                          ┌─────────────────────────┐
+                          │   beacon scheduler      │
+                          │  (loads DAGs + plugins) │
+                          └────────────┬────────────┘
+                                       │
+                                       ▼
+                          ┌─────────────────────────┐
+                          │   metadata store        │  ◄── beacon deploy
+                          │   - deployments/        │  ◄── beacon trigger
+                          │   - triggers/   (queue) │
+                          │   - dag_runs/           │
+                          └─────────────────────────┘
+```
+
+### Validation — `beacon sync`
+
+`beacon sync PATH` reloads plugins and dry-runs every DAG in the bundle.
+It exits non-zero if anything fails to parse — wire it into your CI
+step or pre-restart hook.
+
+```bash
+beacon sync ./my-workflow-repo   # exits 1 on parse / dryrun failure
+```
+
+### Live re-load
+
+```bash
+# Pull, validate, reload (no scheduler restart).
+git -C /srv/beacon/bundle pull
+beacon sync /srv/beacon/bundle && kill -HUP $(pgrep -f 'beacon scheduler')
+```
+
+A systemd timer running this every minute is the supported "auto-sync"
+recipe; **there is no built-in git poller in core** (see
+[production_plan.md §2.3](./production_plan.md)).
 
 ---
 
 ## Environment Strategy
 
-Beacon uses **branch-based deployment** with GitBundle. Each environment runs a
-separate Beacon instance pointed at a specific branch / ref.
+Beacon uses **branch-based deployment**: one Beacon instance per
+environment, each pointed at a different bundle checkout. The bundle is
+identical across environments (same DAGs, same plugins); environments
+differ only in:
 
-| Environment | Branch/Ref      | Trigger                     | `variables_ref` per Deployment |
-|-------------|-----------------|-----------------------------|--------------------------------|
-| **dev**     | `develop`       | Push to develop             | `dev`                          |
-| **staging** | `main`          | Merge PR to main            | `stg`                          |
-| **prod**    | `v*` tag        | Tag from main (e.g. v1.2.0) | `prod`                         |
+1. **Which stage of `variables.yml` is referenced** — set per Deployment
+   via `--variables-ref`.
+2. **Which Deployments exist** in that environment's metadata store.
+
+| Environment | Bundle ref       | Metadata store          | Deployments use          |
+|-------------|------------------|-------------------------|--------------------------|
+| **dev**     | `develop` branch | `beacon-dev` (separate) | `--variables-ref dev`  |
+| **staging** | `main` branch    | `beacon-stg` (separate) | `--variables-ref stg`  |
+| **prod**    | `v*` tag         | `beacon-prod` (separate)| `--variables-ref prod` |
 
 ```text
-feature/* ──> develop ──> main ──> tag v1.2.0
+feature/* ──► develop ──► main ──► tag v1.2.0
                  │          │           │
-                 v          v           v
-             beacon-dev  beacon-stg  beacon-prod
-             (auto sync) (auto sync) (manual tag)
+                 ▼          ▼           ▼
+            beacon-dev  beacon-stg  beacon-prod
+            (bundle =   (bundle =   (bundle = v1.2.0,
+             develop)    main)       pinned)
 ```
 
-A team typically maintains **separate copies of the deployment files per
-environment** — `daily-customers-from-postgres.yml` in the prod branch sets
-`variables_ref: prod`; in dev it sets `variables_ref: dev`. The DAGs themselves
-are identical across environments.
+### Promoting a Deployment to a new environment
 
----
-
-## GitBundle Configuration
-
-Each Beacon instance loads one bundle. The bundle pulls from Git and reparses
-on each version change.
-
-```yaml
-# beacon-dev.yml
-bundle:
-  type: git
-  name: data-workflows
-  repo_url: git@github.com:my-org/my-data-workflows.git
-  branch: develop
-  sync_interval: 60          # seconds, poll for new commits
-```
-
-```yaml
-# beacon-prod.yml
-bundle:
-  type: git
-  name: data-workflows
-  repo_url: git@github.com:my-org/my-data-workflows.git
-  branch: main
-  ref: v1.2.0                 # pin to tag for production
-```
-
----
-
-## Sync Flow
-
-### Development (auto-deploy on push)
-
-```text
-Developer pushes to `develop`
-    │
-    v
-beacon-dev (polling every 60s):
-    1. git fetch → detect new commit on develop
-    2. git checkout develop
-    3. dag_version = commit SHA (e.g. abc1234)
-    4. bundle.load_plugins()    → register ./plugins/*.py
-    5. bundle.discover_dags()   → parse ./dags/**.yml,.py
-       - validate plugins exist, no cycles
-       - store DagRecord(id, version, serialized_dag)
-    6. bundle.discover_deployments() → parse ./deployments/**.yml
-       - validate dag_id resolves to a known Dag
-       - store DeploymentRecord
-    7. Old DAG versions preserved (running instances unaffected)
-```
-
-### Production (deploy on tag)
-
-```text
-Release manager tags main:  git tag v1.2.0 && git push --tags
-    │
-    v
-beacon-prod (webhook or polling):
-    1. git fetch --tags → detect new tag
-    2. git checkout v1.2.0
-    3. dag_version = "v1.2.0"
-    4. Reparse plugins / dags / deployments (same flow as dev)
-    5. Running DagRun (v1.1.0) preserved via TaskContext.dag_version
-```
-
----
-
-## Variable Resolution Order
-
-Variables are merged with priority (last wins):
-
-```text
-variables.yml at bundle root        (lowest priority)
-    └── (future) per-domain variables.yml
-            └── (future) per-DAG variables.yml   (highest priority)
-```
-
-All resolved against the active stage selected by `Deployment.variables_ref`.
-
----
-
-## Deploy Commands
-
-### CLI — deploy bundle
+Deployments do not promote — you re-apply your `scripts/deploy_<env>.sh`
+against the target environment's Beacon. There is no "copy a YAML to the
+prod folder" step.
 
 ```bash
-# Deploy the bundle (parse + register all DAGs and Deployments)
-beacon bundle sync \
-    --bundle ./my-workflow-repo \
-    --name data-workflows
-
-# Or from Git
-beacon bundle sync \
-    --bundle git@github.com:my-org/my-data-workflows.git \
-    --ref v1.2.0 \
-    --name data-workflows
-```
-
-### CLI — manage a Deployment
-
-```bash
-# Enable / disable a deployment without touching files
-beacon deployment enable daily-customers-from-postgres
-beacon deployment disable daily-customers-from-postgres
-
-# Trigger an ad-hoc run (uses the deployment's params + variables_ref)
-beacon deployment trigger daily-customers-from-postgres
-
-# Override params for one run
-beacon deployment trigger daily-customers-from-postgres \
-    --params target_table=customers_backfill
+BEACON_METADATA_PATH=/srv/beacon-prod/metadata ./scripts/deploy_prod.sh
 ```
 
 ---
 
-## Rollback
+## Versioning & Rollback
 
-Because every parse tags `DagRecord` with a version (commit SHA / git tag),
-rollback is just re-pointing the bundle:
+Every DAG load tags the records with a `dag_version` derived from the
+bundle's content hash. In-flight runs are **pinned to their
+`dag_version`** — a sync that ships a new version does not perturb runs
+that were already executing.
+
+### Rollback the bundle
 
 ```bash
-# Rollback prod to previous tag
-beacon bundle sync --ref v1.1.0
+git -C /srv/beacon/bundle checkout v1.1.0
+beacon sync /srv/beacon/bundle && kill -HUP $(pgrep -f 'beacon scheduler')
 ```
 
-Or pin in the bundle config:
+Only **new** runs use the rolled-back DAGs. Deployments themselves do
+not need to change.
 
-```yaml
-# beacon-prod.yml
-bundle:
-  ref: v1.1.0   # rollback: was v1.2.0
-```
+### Pinning a Deployment to an older DAG version
 
-Running DagRuns on v1.2.0 continue unaffected — each `TaskContext` carries
-`dag_version: v1.2.0`. Only **new** runs use the rolled-back version. To pin a
-specific Deployment to an old DAG version independently of the bundle pointer,
-set `Deployment.dag_version`.
+`Deployment.dag_version` is an optional field intended for this case.
+The CLI flag to set it is not wired up yet — until then, rolling back
+the bundle is the operative mechanism.
 
 ---
 
 ## CI/CD Integration
 
-### Production deploy on tag (GitHub Actions)
+The repository contains DAG / plugin code. CI's job is:
+
+1. Lint + unit-test the repo.
+2. Validate the bundle parses cleanly (`beacon sync` — exits non-zero on
+   failure).
+3. On merge / tag, ship the bundle to the target server (rsync, scp,
+   git pull, container image bake — your choice).
+
+CI **does not** edit Deployment records — those are owned by your
+`scripts/deploy_<env>.sh` and re-applied only when intentional.
+
+### Validate on every PR
+
+```yaml
+# .github/workflows/validate.yml
+name: Validate bundle
+on:
+  pull_request:
+  push: { branches: [develop, main] }
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install beacon
+        run: pip install beacon
+      - name: Validate every DAG
+        run: beacon sync .
+```
+
+### Push bundle on tag (production)
 
 ```yaml
 # .github/workflows/deploy-prod.yml
-name: Deploy to Production
+name: Push bundle to prod
 on:
-  push:
-    tags: ['v*']
+  push: { tags: ['v*'] }
 
 jobs:
-  deploy:
+  push:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Validate bundle
-        run: beacon bundle validate --bundle .
-
-      - name: Sync bundle to beacon-prod
+      - name: Validate
+        run: pip install beacon && beacon sync .
+      - name: Rsync to prod
+        run: rsync -az --delete ./ deploy@beacon-prod:/srv/beacon/bundle/
+      - name: Reload prod scheduler
         run: |
-          beacon bundle sync \
-            --bundle . \
-            --ref ${{ github.ref_name }}
-        env:
-          BEACON_API_URL:   ${{ secrets.BEACON_PROD_URL }}
-          BEACON_API_TOKEN: ${{ secrets.BEACON_PROD_TOKEN }}
+          ssh deploy@beacon-prod \
+            'beacon sync /srv/beacon/bundle && kill -HUP $(pgrep -f "beacon scheduler")'
 ```
 
-### Dev auto-deploy on push to `develop`
+The script that authors / updates Deployments runs **separately** —
+either on demand (a developer ran it from their laptop) or as a CI step
+that explicitly opts in (e.g. only on a manual workflow_dispatch). Avoid
+re-running it on every commit; Deployments rarely need to change.
 
-```yaml
-# .github/workflows/deploy-dev.yml
-name: Deploy to Dev
-on:
-  push:
-    branches: [develop]
+---
 
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Sync bundle to beacon-dev
-        run: beacon bundle sync --bundle .
-        env:
-          BEACON_API_URL:   ${{ secrets.BEACON_DEV_URL }}
-          BEACON_API_TOKEN: ${{ secrets.BEACON_DEV_TOKEN }}
-```
+## Cheat-sheet
+
+| Want to…                              | Do                                            |
+|---------------------------------------|-----------------------------------------------|
+| Add / change a DAG                    | Edit `dags/*.yml`, commit, `beacon sync PATH` |
+| Add / change a plugin                 | Drop `.py` in `plugins/`, `beacon sync PATH`  |
+| Add a Deployment                      | `beacon deploy --id ... --dag-id ...`         |
+| Change a Deployment's cron / params   | `beacon deploy --id <same> ...` again         |
+| Pause a Deployment                    | `beacon deploy --id ... --disabled` *(re-deploy without `--disabled` to re-enable)* |
+| Trigger an ad-hoc run                 | `beacon trigger <deployment-id>`              |
+| Inspect what's deployed               | `beacon list deployments`                     |
+| Inspect recent runs                   | `beacon list runs --dag-id <id>`              |
+| Tail per-attempt logs                 | `beacon logs DAG_ID TASK_ID --run RUN_ID -f`  |
+| Reload the bundle without restart     | `kill -HUP $(pgrep -f 'beacon scheduler')`    |
+| Rebuild a fresh env from scratch      | Re-apply `scripts/deploy_<env>.sh`            |
