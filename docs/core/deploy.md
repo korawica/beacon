@@ -9,7 +9,7 @@ in the metadata store** and are created/updated/deleted via the CLI
 (or, later, the API or UI). If you delete the metadata store, every
 Deployment is gone — by design.
 
-This split mirrors the [Design – DAG vs Deployment](./design.md#dag-vs-deployment-reuse-model)
+This split mirrors the [Reference – Dag vs Deployment](./reference.md#dag-vs-deployment)
 reuse model: the same DAG template can have many Deployments, each
 binding it to a different cron, params, variable overrides, and
 environment.
@@ -52,39 +52,42 @@ environment.
 
 ## Repository Structure
 
-A bundle is a directory (typically a Git repo). There is no
-`deployments/` folder — Deployments live in the metadata store.
+A bundle is a directory (typically a Git repo). There is no `deployments/` folder
+— Deployments live in the metadata store that was created by CLI or API.
 
 ```text
-my-workflow-repo/
-├── dags/                                # DAG templates (.yml or .py)
-│   ├── global_variables.yml             # bundle-wide variable defaults
-│   └── group/
-│       ├── global_variables.yml         # group-wide variable defaults
-│       └── dag_name/
-│           ├── dag.yml                  # the DAG template
-│           ├── variables.yml            # dag-scope variable defaults
-│           └── assets/                  # dag-local files for `uses: py`
-│               ├── transform.py
-│               ├── ml_training.py
-│               └── validate.py
-├── plugins/                             # Custom plugins (auto-discovered)
-│   ├── gcs_extract.py
-│   └── bigquery_load.py
-└── assets/                              # bundle-global files for `uses: py`
-    ├── transform.py
-    └── validate.py
+my-team-repo/
+ ├── dags/                                # DAG templates (.yml or .py)
+ │   ├── global_variables.yml             # bundle-wide variable defaults
+ │   └── group/
+ │       ├── global_variables.yml         # group-wide variable defaults
+ │       └── dag_name/
+ │           ├── dag.yml                  # the DAG template
+ │           ├── variables.yml            # dag-scope variable defaults
+ │           └── assets/                  # dag-local files for `uses: py`
+ │               ├── transform.py
+ │               ├── ml_training.py
+ │               └── validate.py
+ ├── plugins/                             # Custom plugins (auto-discovered)
+ │   ├── actions/                         # Custom action types (e.g. `uses: gcs_extract`)
+ │   │   ├── gcs_extract.py
+ │   │   └── bigquery_load.py
+ │   └── callbacks/                       # Custom callbacks (e.g. `on_event: failure, hook: ms_team`)
+ │       └── ms_team.py
+ └── assets/                              # bundle-global files for `uses: py`
+     ├── transform.py
+     └── validate.py
 ```
 
 Rules in one line each:
 
-- One DAG per `dag_name/` folder; the file is `dag.yml` (or `dag.py`).
+- One DAG per `dag_name/` folder; the file is `dag.yml`.
 - A `variables.yml` next to a `dag.yml` only feeds that DAG.
 - A `global_variables.yml` only feeds DAGs in its subtree.
 - `py_file: transform.py` is resolved by trying the DAG's local
   `assets/transform.py` first, then the bundle-root
   `assets/transform.py`; if neither exists the task fails.
-- `plugins/` is flat (or nested for organisation) and auto-loaded.
+- `plugins/` is flat (or nested for organization) and autoloaded.
 
 ---
 
@@ -92,9 +95,9 @@ Rules in one line each:
 
 ### DAG file (`dags/sales/extract_load_table/dag.yml`)
 
-A DAG is a **template** — no schedule, no environment, no concrete
+A DAG is a **template** file — no schedule, no environment, no concrete
 runtime params. It declares the param schema and the action graph. The
-same `dag.yml` is bit-identical across dev / staging / prod.
+same `dag.yml` is bit-identical across dev / staging / prod environments.
 
 ```yaml
 id: extract-load-table
@@ -390,7 +393,7 @@ beacon sync /srv/beacon/bundle && kill -HUP $(pgrep -f 'beacon scheduler')
 
 A systemd timer running this every minute is the supported "auto-sync"
 recipe; **there is no built-in git poller in core** (see
-[production_plan.md §2.3](./production_plan.md)).
+[roadmap.md §5.5](./roadmap.md)).
 
 ---
 
