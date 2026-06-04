@@ -699,6 +699,65 @@ class DagRunner:
         )
         return to_clear
 
+    async def fail(
+        self,
+        *,
+        run_id: str,
+        task_ids: str | list[str],
+    ) -> dict[str, list[str]]:
+        """Force-fail task(s) and re-fire affected teardowns.
+
+        Use when a task is stuck or known-bad and you want beacon to
+        clean up the resource (via the teardown) instead of retrying.
+
+        Semantics:
+            1. Mark each task as ``FAILED`` in metadata.
+            2. Auto-clear any teardown whose dep set includes a failed task.
+            3. Resume the run so only the cleared teardowns execute.
+
+        Returns:
+            ``{"failed": [...], "teardowns_cleared": [...]}``.
+
+        Example::
+
+            runner = DagRunner(dag, meta=meta)
+            await runner.fail(run_id="manual-spark-x", task_ids="process")
+            await runner.run(run_id="manual-spark-x", resume=True)
+            # → `stop` teardown fires; everything else stays as-is.
+        """
+        if isinstance(task_ids, str):
+            task_ids = [task_ids]
+
+        graph = _build_graph(self.dag)
+        for tid in task_ids:
+            if tid not in graph.task_map:
+                raise ValueError(
+                    f"Task {tid!r} not found in DAG {self.dag.id!r}"
+                )
+
+        # 1. Mark tasks as FAILED.
+        for tid in task_ids:
+            await self.meta.set_task_state(
+                run_id, self.dag.id, tid, TaskState.FAILED
+            )
+
+        # 2. Auto-clear teardowns whose dep set intersects failed tasks.
+        failed_set = set(task_ids)
+        teardowns_cleared: list[str] = []
+        for teardown_id, deps in graph.teardown_deps.items():
+            if deps & failed_set:
+                await self.meta.clear_task(run_id, self.dag.id, teardown_id)
+                teardowns_cleared.append(teardown_id)
+
+        logger.info(
+            "Force-failed %s in run %s/%s; teardowns cleared: %s",
+            task_ids,
+            self.dag.id,
+            run_id,
+            teardowns_cleared,
+        )
+        return {"failed": task_ids, "teardowns_cleared": teardowns_cleared}
+
 
 def _collect_self_and_downstream(
     graph: _Graph, root: str, *, include_downstream: bool
