@@ -5,6 +5,7 @@ import click
 from .commands import (
     config_cmd,
     deploy_cmd,
+    deployment_cmd,
     dryrun_cmd,
     list_cmd,
     logs_cmd,
@@ -26,6 +27,7 @@ cli.add_command(dryrun_cmd.dryrun)
 cli.add_command(test_cmd.test)
 cli.add_command(run_cmd.run)
 cli.add_command(deploy_cmd.deploy)
+cli.add_command(deployment_cmd.deployment_cmd)
 cli.add_command(sync_cmd.sync)
 cli.add_command(trigger_cmd.trigger)
 cli.add_command(scheduler_cmd.scheduler)

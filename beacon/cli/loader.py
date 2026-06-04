@@ -33,7 +33,9 @@ def load_dags(path: str | Path) -> list[Dag]:
     bundle.load_plugins()
     dags: list[Dag] = []
     for f in bundle.discover_dags():
-        dags.extend(_load_dags_from_file(f))
+        for d in _load_dags_from_file(f):
+            d._bundle_root = bundle.path
+            dags.append(d)
     return dags
 
 
@@ -63,10 +65,14 @@ def load_one_dag(path: str | Path, dag_id: str | None = None) -> Dag:
 
 def _load_dags_from_file(path: Path) -> list[Dag]:
     if path.suffix == ".py":
-        return _load_py(path)
-    if path.suffix in (".yml", ".yaml"):
-        return _load_yaml(path)
-    return []
+        dags = _load_py(path)
+    elif path.suffix in (".yml", ".yaml"):
+        dags = _load_yaml(path)
+    else:
+        return []
+    for d in dags:
+        d._source_file = path
+    return dags
 
 
 def _load_py(path: Path) -> list[Dag]:

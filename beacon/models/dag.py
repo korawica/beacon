@@ -2,9 +2,10 @@ import asyncio
 import logging
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 from .group import ActionType
 from .param import Param
@@ -46,6 +47,10 @@ class Dag(BaseModel):
             "Default inputs merged into every task's inputs before execution"
         ),
     )
+
+    # --- bundle metadata (set by the loader; not serialised) ----------
+    _source_file: Path | None = PrivateAttr(default=None)
+    _bundle_root: Path | None = PrivateAttr(default=None)
 
     def run(
         self,

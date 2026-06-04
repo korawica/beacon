@@ -1,16 +1,19 @@
 """``beacon sync PATH`` — re-read a LocalBundle and validate it.
 
-Without persistent DAG storage (that's Phase 2.1 / SqliteMetadata), sync
-is currently a *validation* + *plugin-load* pass. It:
+Sync is the boundary between bundle (on disk) and Deployments (in
+metadata). It:
 
   * loads custom plugins from ``{PATH}/plugins/``
-  * imports every DAG file
-  * dry-runs every DAG to confirm it parses + renders cleanly
+  * imports + dry-runs every DAG in the bundle
+  * computes the new ``dag_version`` and rolls **non-pinned** deployments
+    forward (pinned deployments — those with stored ``--var`` overrides
+    — are left on their old ``dag_version`` and reported as ``stale``)
 
-Anything failing exits non-zero so a CI step or systemd timer can detect
-broken bundles before they hit the scheduler.
+Anything failing validation exits non-zero so a CI step or systemd
+timer can detect broken bundles before they hit the scheduler.
 """
 
+import asyncio
 import sys
 from pathlib import Path
 
@@ -18,13 +21,28 @@ import click
 
 from ...core.bundle import LocalBundle
 from ...dryrun import dryrun as run_dryrun
+from ...metadata import JsonMetadata
+from ...models.deployment import Deployment
 from ..loader import _load_dags_from_file
+from ..settings import get
 
 
 @click.command()
 @click.argument("path", type=click.Path(exists=True, file_okay=False))
-def sync(path: str) -> None:
-    """Validate every DAG + load every plugin in the bundle at PATH."""
+@click.option(
+    "--metadata-path",
+    default=None,
+    help=(
+        "Metadata store path. Defaults to $BEACON_METADATA_PATH. If unset, "
+        "sync only validates the bundle and does not roll any deployments."
+    ),
+)
+def sync(path: str, metadata_path: str | None) -> None:
+    """Validate every DAG + load every plugin in the bundle at PATH.
+
+    When a metadata store is reachable, also rolls every non-pinned
+    deployment to the new ``dag_version`` and reports pinned/stale ones.
+    """
     p = Path(path).resolve()
     bundle = LocalBundle(name=p.name, path=p)
     plugins = bundle.load_plugins()
@@ -36,6 +54,7 @@ def sync(path: str) -> None:
         sys.exit(1)
 
     failures: list[str] = []
+    valid_dag_ids: set[str] = set()
     total = 0
     for f in dag_files:
         for dag in _load_dags_from_file(f):
@@ -43,12 +62,70 @@ def sync(path: str) -> None:
             result = run_dryrun(dag)
             mark = "✓" if result.is_valid else "✗"
             click.echo(f"  {mark} {dag.id}  ({f.name})")
-            if not result.is_valid:
+            if result.is_valid:
+                valid_dag_ids.add(dag.id)
+            else:
                 failures.append(dag.id)
 
     click.echo(
         f"bundle {bundle.name!r} version={bundle.version} "
         f"dags={total} failed={len(failures)}"
     )
+
+    # Roll non-pinned deployments forward in metadata.
+    meta_path = metadata_path or get("BEACON_METADATA_PATH")
+    if meta_path and not failures:
+        rolled, pinned_stale, unknown = asyncio.run(
+            _roll_deployments(meta_path, bundle.version, valid_dag_ids)
+        )
+        if rolled:
+            click.echo(
+                f"deployments rolled to {bundle.version}: "
+                + ", ".join(sorted(rolled))
+            )
+        if pinned_stale:
+            click.echo(
+                "deployments pinned (stale): "
+                + ", ".join(sorted(pinned_stale))
+                + "  — run `beacon deployment sync` to accept the new version"
+            )
+        if unknown:
+            click.echo(
+                "WARNING: deployments reference unknown dag_id(s): "
+                + ", ".join(sorted(unknown))
+            )
+
     if failures:
         sys.exit(1)
+
+
+async def _roll_deployments(
+    metadata_path: str,
+    new_version: str,
+    valid_dag_ids: set[str],
+) -> tuple[list[str], list[str], list[str]]:
+    """Return ``(rolled, pinned_stale, unknown_dag)`` deployment-id lists."""
+    meta = JsonMetadata(metadata_path)
+    deployments = await meta.list_deployments()
+    rolled: list[str] = []
+    pinned_stale: list[str] = []
+    unknown: list[str] = []
+    for raw in deployments:
+        # Strip scheduler bookkeeping before model_validate; upsert
+        # preserves it on the write back.
+        dep = Deployment.model_validate(
+            {k: v for k, v in raw.items() if k != "_scheduler"}
+        )
+        if dep.dag_id not in valid_dag_ids:
+            unknown.append(dep.id)
+            continue
+        if dep.is_pinned:
+            if dep.dag_version != new_version:
+                pinned_stale.append(dep.id)
+            continue
+        if dep.dag_version == new_version:
+            continue
+        dep.dag_version = new_version
+        await meta.upsert_deployment(dep.model_dump())
+        rolled.append(dep.id)
+    return rolled, pinned_stale, unknown

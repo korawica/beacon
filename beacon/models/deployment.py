@@ -92,11 +92,14 @@ class Deployment(BaseModel):
             "TaskContext.params at trigger time."
         ),
     )
-    variables_ref: str | None = Field(
-        default=None,
+    variable_overrides: dict[str, Any] = Field(
+        default_factory=dict,
         description=(
-            "Stage name in variables.yml whose vars are used by `vars()` "
-            "templating. Example: 'prod', 'dev', 'staging'."
+            "Per-deployment variable overrides. Highest precedence in the "
+            "scope chain (deployment > dag variables.yml > group "
+            "global_variables.yml > bundle global_variables.yml). "
+            "Storing any override marks the deployment as 'pinned' — see "
+            "``is_pinned``."
         ),
     )
 
@@ -122,3 +125,12 @@ class Deployment(BaseModel):
                 f"start_date ({self.start_date})"
             )
         return self
+
+    @property
+    def is_pinned(self) -> bool:
+        """A Deployment is pinned iff it stores any variable override.
+
+        Pinned deployments are not auto-rolled to a new ``dag_version``
+        on ``beacon sync`` — see ``docs/core/deploy.md``.
+        """
+        return bool(self.variable_overrides)

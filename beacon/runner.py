@@ -169,12 +169,17 @@ class DagRunner:
         executor: BaseExecutor | None = None,
         max_concurrent: int = 10,
         variables: dict[str, Any] | None = None,
+        bundle_root: Any = None,
     ) -> None:
         self.dag = dag
         self.meta = meta or self._tempdir_meta()
         self.executor = executor or LocalExecutor()
         self.max_concurrent = max_concurrent
         self.variables = variables or {}
+        # Bundle context used by plugins to resolve relative asset paths
+        # (e.g. ``py_file: transform.py``). Falls back to the dag's loader-set
+        # ``_bundle_root`` so ``Dag.run()`` works without explicit plumbing.
+        self.bundle_root = bundle_root or getattr(dag, "_bundle_root", None)
 
     @staticmethod
     def _tempdir_meta() -> JsonMetadata:
@@ -185,6 +190,44 @@ class DagRunner:
     # --- public API ---
 
     async def run(
+        self,
+        *,
+        params: dict[str, Any] | None = None,
+        run_id: str | None = None,
+        logical_date: datetime | None = None,
+        dag_version: str = "local",
+        resume: bool = False,
+    ) -> DagRunResult:
+        """Execute the DAG end-to-end. See :meth:`_run_impl` for details.
+
+        This wrapper pushes a :class:`~beacon.core.assets.BundleContext`
+        so plugins can resolve relative asset paths (e.g.
+        ``py_file: transform.py``) before the impl body runs.
+        """
+        from .core.assets import (
+            BundleContext,
+            reset_bundle_context,
+            set_bundle_context,
+        )
+
+        token = set_bundle_context(
+            BundleContext(
+                bundle_root=self.bundle_root,
+                dag_source_file=getattr(self.dag, "_source_file", None),
+            )
+        )
+        try:
+            return await self._run_impl(
+                params=params,
+                run_id=run_id,
+                logical_date=logical_date,
+                dag_version=dag_version,
+                resume=resume,
+            )
+        finally:
+            reset_bundle_context(token)
+
+    async def _run_impl(
         self,
         *,
         params: dict[str, Any] | None = None,

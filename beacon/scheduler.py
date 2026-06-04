@@ -43,6 +43,7 @@ from typing import Any
 from croniter import croniter
 
 from .core.bundle import LocalBundle
+from .core.variables import VariableScope, merge_with_overrides
 from .metadata import JsonMetadata
 from .models.dag import Dag
 from .runner import DagRunner
@@ -79,6 +80,8 @@ class DeploymentScheduler:
         self._stop = asyncio.Event()
         self._reload_requested = False
         self._dags: dict[str, Dag] = {}
+        self._variable_scope: VariableScope | None = None
+        self._bundle_root: Path | None = None
         self._in_flight: set[str] = set()  # deployment ids currently running
         self._tasks: set[asyncio.Task[Any]] = set()
 
@@ -95,8 +98,11 @@ class DeploymentScheduler:
         dags: dict[str, Dag] = {}
         for f in bundle.discover_dags():
             for d in _load_dags_from_file(f):
+                d._bundle_root = bundle.path
                 dags[d.id] = d
         self._dags = dags
+        self._variable_scope = bundle.variable_scope
+        self._bundle_root = bundle.path
         logger.info(
             "Loaded %d DAG(s) from %s: %s",
             len(dags),
@@ -230,6 +236,23 @@ class DeploymentScheduler:
             return
 
         params = {**(dep.get("params") or {}), **override_params}
+
+        # Resolve variables = scoped bundle vars + deployment overrides.
+        variables: dict[str, Any] = {}
+        if self._variable_scope is not None and dag._source_file is not None:
+            try:
+                scoped = self._variable_scope.resolve_for(dag._source_file)
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "Variable scope resolution failed for dag %r: %s",
+                    dag.id,
+                    exc,
+                )
+                scoped = {}
+            variables = merge_with_overrides(
+                scoped, dep.get("variable_overrides") or {}
+            )
+
         if trigger == "scheduled":
             run_id = (
                 f"scheduled-{dag.id}-{logical_date.strftime('%Y%m%dT%H%M%S')}"
@@ -245,6 +268,7 @@ class DeploymentScheduler:
                 run_id=run_id,
                 logical_date=logical_date,
                 params=params,
+                variables=variables,
                 trigger=trigger,
             )
         )
@@ -259,6 +283,7 @@ class DeploymentScheduler:
         run_id: str,
         logical_date: datetime,
         params: dict[str, Any],
+        variables: dict[str, Any],
         trigger: str,
     ) -> None:
         try:
@@ -270,7 +295,12 @@ class DeploymentScheduler:
                     dag.id,
                     run_id,
                 )
-                runner = DagRunner(dag, meta=self.meta)
+                runner = DagRunner(
+                    dag,
+                    meta=self.meta,
+                    variables=variables,
+                    bundle_root=self._bundle_root,
+                )
                 result = await runner.run(
                     params=params,
                     run_id=run_id,

@@ -30,17 +30,49 @@ def list_dags(path: str) -> None:
 
 @list_cmd.command("deployments")
 @click.option("--metadata-path", default=None)
-def list_deployments(metadata_path: str | None) -> None:
+@click.option(
+    "--bundle",
+    "bundle_path",
+    default=None,
+    type=click.Path(exists=True, file_okay=False),
+    help=(
+        "Bundle directory. When given, deployments whose dag_version "
+        "differs from the bundle's current version are marked 'stale'."
+    ),
+)
+def list_deployments(
+    metadata_path: str | None, bundle_path: str | None
+) -> None:
     """List every Deployment in metadata."""
     meta = JsonMetadata(metadata_path or get("BEACON_METADATA_PATH"))
     deps = asyncio.run(meta.list_deployments())
     if not deps:
         click.echo("(no deployments)")
         return
+
+    bundle_version: str | None = None
+    if bundle_path:
+        from ...core.bundle import LocalBundle
+
+        bundle_version = LocalBundle(name="bundle", path=bundle_path).version
+
     for d in deps:
-        flag = "" if d.get("enabled", True) else "  [disabled]"
+        flags: list[str] = []
+        if not d.get("enabled", True):
+            flags.append("disabled")
+        if d.get("variable_overrides"):
+            flags.append("pinned")
+        version = d.get("dag_version") or "—"
+        if (
+            bundle_version is not None
+            and d.get("dag_version")
+            and d["dag_version"] != bundle_version
+        ):
+            flags.append(f"stale (bundle: {bundle_version})")
+        suffix = ("  [" + ", ".join(flags) + "]") if flags else ""
         click.echo(
-            f"{d['id']:<30} dag={d['dag_id']:<20} cron={d.get('cron')!r}{flag}"
+            f"{d['id']:<30} dag={d['dag_id']:<20} "
+            f"version={version:<13} cron={d.get('cron')!r}{suffix}"
         )
 
 

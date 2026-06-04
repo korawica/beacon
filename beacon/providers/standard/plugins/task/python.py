@@ -36,6 +36,7 @@ from typing import Any, ClassVar, TYPE_CHECKING
 from pydantic import Field
 
 from .....core import BasePlugin
+from .....core.assets import resolve_asset
 from .....runtime import (
     RuntimeContext,
     _clear_runtime_context,
@@ -99,10 +100,9 @@ class PythonPlugin(BasePlugin):
             4. Call the target function with params as kwargs
             5. Return the result (if dict) as task outputs
         """
-        # Resolve file path
-        py_path = Path(self.py_file).resolve()
-        if not py_path.exists():
-            raise FileNotFoundError(f"Python file not found: {py_path}")
+        # Resolve file path via the bundle-aware asset lookup
+        # (local dag assets first, then bundle-global assets, else raise).
+        py_path = resolve_asset(self.py_file)
 
         # Set environment variables
         original_env: dict[str, str | None] = {}
@@ -201,9 +201,10 @@ class PythonPlugin(BasePlugin):
         if not self.py_teardown:
             return
 
-        py_path = Path(self.py_file).resolve()
-        if not py_path.exists():
-            logger.warning("Teardown skipped: file not found %s", py_path)
+        try:
+            py_path = resolve_asset(self.py_file)
+        except FileNotFoundError as exc:
+            logger.warning("Teardown skipped: %s", exc)
             return
 
         # Re-set runtime context so teardown function can use load_context()

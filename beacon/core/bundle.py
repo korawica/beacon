@@ -1,25 +1,27 @@
 """Bundles.
 
-A bundle is a source of DAG definitions and custom plugins. It represents
-a deployable unit — typically a Git repository with this structure:
+A bundle is a source of DAG definitions, plugins, assets, and the
+default variable values that go with them. It represents a deployable
+unit — typically a Git repository with this structure (see
+``docs/core/deploy.md`` for the full policy)::
 
     my-workflow-repo/
     ├── dags/
-    │   ├── hello_world.yml
-    │   └── etl_pipeline.py
-    └── plugins/
-        └── my_custom_plugin.py
+    │   ├── global_variables.yml          # bundle-wide variable defaults
+    │   └── group/
+    │       ├── global_variables.yml      # group-scope variable defaults
+    │       └── dag_name/
+    │           ├── dag.yml
+    │           ├── variables.yml         # dag-scope variable defaults
+    │           └── assets/               # dag-local files for ``uses: py``
+    ├── plugins/                          # auto-discovered custom plugins
+    └── assets/                           # bundle-global files for ``uses: py``
 
 The bundle is responsible for:
-  1. Discovering and loading custom plugins from ./plugins
-  2. Parsing DAG definitions from ./dags
-  3. Computing a version tag (content hash, git SHA, etc.)
-
-Production flow (GitBundle):
-  - Team merges to main branch
-  - GitBundle sync detects new commit → pulls repo
-  - Bundle.load_plugins() auto-discovers plugins → registers them
-  - Bundle.discover_dags() returns paths for the scheduler/parser to consume
+  1. Discovering and loading custom plugins from ``./plugins``
+  2. Parsing DAG definitions from ``./dags``
+  3. Exposing the scoped :class:`VariableScope` for variable resolution
+  4. Computing a version tag (content hash) used to detect drift
 """
 
 import hashlib
@@ -28,29 +30,30 @@ import logging
 import sys
 from pathlib import Path
 
+from .variables import VariableScope
+
 logger = logging.getLogger("beacon.bundle")
 
 
 class LocalBundle:
     """Local Bundle — loads DAGs and plugins from a local directory.
 
-    Expected structure::
+    Expected structure (see ``docs/core/deploy.md``)::
 
         {path}/
-        ├── dags/       # DAG definitions (.yml or .py)
-        └── plugins/    # Custom plugins (auto-registered)
+        ├── dags/       # DAG definitions (.yml or .py) + variables files
+        ├── plugins/    # Custom plugins (auto-registered)
+        └── assets/     # Bundle-global asset files
 
-    Or flat structure (all files at root)::
-
-        {path}/
-        ├── dag.yml
-        └── my_plugin.py
+    A flat layout (single ``dag.yml`` at ``path``) is still tolerated for
+    one-off / ad-hoc runs; variable scoping then has no effect.
     """
 
     def __init__(self, name: str, path: str | Path) -> None:
         self.name = name
         self.path = Path(path).resolve()
         self._version: str | None = None
+        self._variable_scope: VariableScope | None = None
 
     @property
     def dags_path(self) -> Path:
@@ -70,6 +73,13 @@ class LocalBundle:
         if self._version is None:
             self._version = self._compute_version()
         return self._version
+
+    @property
+    def variable_scope(self) -> VariableScope:
+        """Lazy :class:`VariableScope` rooted at ``dags_path``."""
+        if self._variable_scope is None:
+            self._variable_scope = VariableScope(dags_root=self.dags_path)
+        return self._variable_scope
 
     def load_plugins(self) -> list[str]:
         """Discover and register custom plugins from the plugins directory.

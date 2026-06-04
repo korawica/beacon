@@ -23,9 +23,16 @@ from ._shared import parse_kv_options
 @click.option("--timezone", default="UTC", show_default=True)
 @click.option("--desc", default=None, help="Human-readable description.")
 @click.option(
-    "--variables-ref",
-    default=None,
-    help="Stage name in variables.yml used by vars() templating.",
+    "--var",
+    "variable_overrides",
+    multiple=True,
+    metavar="KEY=VALUE",
+    help=(
+        "Per-deployment variable override (repeatable). Highest precedence "
+        "in the scope chain. Storing any override marks the deployment as "
+        "'pinned': it is not auto-rolled when ``beacon sync`` ships a new "
+        "bundle version — use ``beacon deployment sync`` to accept."
+    ),
 )
 @click.option(
     "--param",
@@ -58,7 +65,7 @@ def deploy(
     cron: str | None,
     timezone: str,
     desc: str | None,
-    variables_ref: str | None,
+    variable_overrides: tuple[str, ...],
     params: tuple[str, ...],
     owners: tuple[str, ...],
     disabled: bool,
@@ -81,12 +88,15 @@ def deploy(
         timezone=timezone,
         desc=desc,
         enabled=not disabled,
-        variables_ref=variables_ref,
+        variable_overrides=parse_kv_options(variable_overrides),
         params=parse_kv_options(params),
         owners=list(owners),
     )
 
     meta = JsonMetadata(metadata_path or get("BEACON_METADATA_PATH"))
     asyncio.run(meta.upsert_deployment(dep.model_dump()))
-    click.echo(f"Deployment {dep.id!r} → dag={dep.dag_id} cron={dep.cron!r}")
+    pinned = " [pinned]" if dep.is_pinned else ""
+    click.echo(
+        f"Deployment {dep.id!r} → dag={dep.dag_id} cron={dep.cron!r}{pinned}"
+    )
     click.echo(f"enabled={dep.enabled}  metadata={meta.base_path}")
