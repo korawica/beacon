@@ -177,7 +177,7 @@ class DagRunner:
         self.max_concurrent = max_concurrent
         self.variables = variables or {}
         # Bundle context used by plugins to resolve relative asset paths
-        # (e.g. ``py_file: transform.py``). Falls back to the dag's loader-set
+        # (e.g. ``py_statement: transform.py``). Falls back to the dag's loader-set
         # ``_bundle_root`` so ``Dag.run()`` works without explicit plumbing.
         self.bundle_root = bundle_root or getattr(dag, "_bundle_root", None)
 
@@ -202,7 +202,7 @@ class DagRunner:
 
         This wrapper pushes a :class:`~beacon.core.assets.BundleContext`
         so plugins can resolve relative asset paths (e.g.
-        ``py_file: transform.py``) before the impl body runs.
+        ``py_statement: transform.py``) before the impl body runs.
         """
         from .core.assets import (
             BundleContext,

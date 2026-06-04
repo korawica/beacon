@@ -9,10 +9,11 @@ For persistent task state across retries and remote executors, see
 
 import logging
 from datetime import datetime
-from typing import Any, Protocol, TypedDict
+from typing import TYPE_CHECKING, Any, Protocol, TypedDict
 
-from .state import TaskState
-from .task_context import TaskContext
+if TYPE_CHECKING:
+    from .state import TaskState
+    from .task_context import TaskContext
 
 
 class MetadataProtocol(Protocol):

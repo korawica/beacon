@@ -116,6 +116,17 @@ class BasePlugin(BaseModel, ABC, metaclass=PluginMeta):
     :func:`beacon.dryrun.dryrun`.
     """
 
+    template_ext: ClassVar[tuple[str, ...]] = ()
+    """File extensions that trigger file-loading + Jinja rendering.
+
+    When a plugin input value ends with one of these extensions, the plugin
+    should load the file and render its contents with Jinja before use.
+    Empty tuple (default) means no file-extension-based rendering.
+
+    Example: ``template_ext = (".py",)`` means any input ending in ``.py``
+    will be treated as a file path to load and render.
+    """
+
     @abstractmethod
     async def execute(self, context: Context):
         """Plugin execution method.

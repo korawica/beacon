@@ -33,11 +33,11 @@ environment.
 > 4. **Shallow override** per top-level key. The whole value at a key
 >    is replaced; there is no deep-merge of nested dicts.
 > 5. **Asset paths are looked up local-first, then global, then raise.**
->    `py_file: transform.py` is resolved by trying
+>    `py_statement: transform.py` is resolved by trying
 >    `dags/<group>/<dag>/assets/transform.py` first, then
 >    `<bundle>/assets/transform.py`. If neither exists the task fails
 >    with `FileNotFoundError`. The same lookup applies to any nested
->    subpath (e.g. `py_file: sub/transform.py`).
+>    subpath (e.g. `py_statement: sub/transform.py`).
 > 6. **DAG identity** is the explicit `id:` field inside `dag.yml`.
 >    The folder path is organisational; it is not the id.
 > 7. **One DAG per folder**, named `dag.yml` (or `dag.py`).
@@ -84,7 +84,7 @@ Rules in one line each:
 - One DAG per `dag_name/` folder; the file is `dag.yml`.
 - A `variables.yml` next to a `dag.yml` only feeds that DAG.
 - A `global_variables.yml` only feeds DAGs in its subtree.
-- `py_file: transform.py` is resolved by trying the DAG's local
+- `py_statement: transform.py` is resolved by trying the DAG's local
   `assets/transform.py` first, then the bundle-root
   `assets/transform.py`; if neither exists the task fails.
 - `plugins/` is flat (or nested for organization) and autoloaded.
@@ -117,7 +117,7 @@ actions:
     type: task
     uses: py
     inputs:
-      py_file: extract.py                 # tried as ./assets/extract.py first
+      py_statement: extract.py                 # tried as ./assets/extract.py first
       params:
         source: "{{ params.source_system }}"
         date: "{{ params.run_date }}"
@@ -127,7 +127,7 @@ actions:
     upstream: [extract]
     uses: py
     inputs:
-      py_file: transform.py               # falls back to /assets/transform.py
+      py_statement: transform.py               # falls back to /assets/transform.py
     retries: 2
     retry_delay: 30
 
@@ -558,8 +558,8 @@ deployments.
 | Want to…                                  | Do                                                                                                 |
 |-------------------------------------------|----------------------------------------------------------------------------------------------------|
 | Add / change a DAG                        | Edit `dags/<group>/<dag>/dag.yml`, commit, `beacon sync PATH`                                      |
-| Add a dag-local asset                     | Drop file in `dags/<group>/<dag>/assets/`, reference as bare filename in `py_file:`                |
-| Add a bundle-global asset                 | Drop file in `assets/`, reference as bare filename in `py_file:` (used when no local file matches) |
+| Add a dag-local asset                     | Drop file in `dags/<group>/<dag>/assets/`, reference as bare filename in `py_statement:`                |
+| Add a bundle-global asset                 | Drop file in `assets/`, reference as bare filename in `py_statement:` (used when no local file matches) |
 | Change a default variable                 | Edit the closest `variables.yml` / `global_variables.yml`, `beacon sync`                           |
 | Add / change a plugin                     | Drop `.py` in `plugins/`, `beacon sync PATH`                                                       |
 | Add a Deployment                          | `beacon deploy --id ... --dag-id ...`                                                              |

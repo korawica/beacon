@@ -2,10 +2,10 @@
 
 Policy (see ``docs/core/deploy.md``):
 
-    A ``py_file`` (or other asset path) is looked up in this order:
+    A ``py_statement`` (or other asset path) is looked up in this order:
 
-      1. ``<dag_folder>/assets/<py_file>``     (DAG-local assets)
-      2. ``<bundle_root>/assets/<py_file>``    (bundle-global assets)
+      1. ``<dag_folder>/assets/<py_statement>``     (DAG-local assets)
+      2. ``<bundle_root>/assets/<py_statement>``    (bundle-global assets)
       3. raise ``FileNotFoundError``
 
 The bundle context (bundle_root + DAG source file) is pushed onto a

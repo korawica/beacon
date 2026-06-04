@@ -121,7 +121,7 @@ def test_py_teardown_fires_on_success(script, tmp_path):
                 id="t",
                 uses="py",
                 inputs={
-                    "py_file": str(script),
+                    "py_statement": str(script),
                     "py_function": "main",
                     "py_teardown": "cleanup",
                     "params": {"events_path": ep},
@@ -144,7 +144,7 @@ def test_py_teardown_fires_on_failure(script, tmp_path):
                 id="t",
                 uses="py",
                 inputs={
-                    "py_file": str(script),
+                    "py_statement": str(script),
                     "py_function": "failing_main",
                     "py_teardown": "cleanup",
                     "params": {"events_path": ep},
@@ -169,7 +169,7 @@ def test_py_no_teardown_field_is_noop(script, tmp_path):
                 id="t",
                 uses="py",
                 inputs={
-                    "py_file": str(script),
+                    "py_statement": str(script),
                     "py_function": "main",
                     "params": {"events_path": ep},
                 },

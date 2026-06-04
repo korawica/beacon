@@ -18,7 +18,7 @@ def test_task_context_lifecycle():
         data_interval_start=datetime.now(),
         data_interval_end=datetime.now(),
         params={"source_system": "example"},
-        inputs={"py_file": "./process.py"},
+        inputs={"py_statement": "./process.py"},
         plugin_name="py",
         retries=2,
     )

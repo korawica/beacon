@@ -63,10 +63,10 @@ def tmp_script(tmp_path):
     return _write
 
 
-def _make_task_context(py_file: str, **input_overrides) -> TaskContext:
+def _make_task_context(py_statement: str, **input_overrides) -> TaskContext:
     """Create a minimal TaskContext for the py plugin."""
     inputs = {
-        "py_file": py_file,
+        "py_statement": py_statement,
         "py_function": "main",
         "params": {},
         "env": {},
@@ -163,7 +163,7 @@ def test_py_plugin_env_vars(tmp_script):
 
 
 def test_py_plugin_file_not_found(tmp_script):
-    """Test error when py_file doesn't exist."""
+    """Test error when py_statement doesn't exist."""
     task_ctx = _make_task_context("/nonexistent/path/script.py")
 
     executor = LocalExecutor()
@@ -201,7 +201,7 @@ def test_full_action_lifecycle(tmp_script):
                 uses="py",
                 retries=2,
                 inputs={
-                    "py_file": script,
+                    "py_statement": script,
                     "py_function": "main",
                     "params": {"source_system": "lifecycle_test"},
                 },

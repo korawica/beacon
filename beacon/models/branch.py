@@ -22,7 +22,7 @@ class Branch(BaseAction):
             type: branch
             uses: py
             inputs:
-              py_file: ./check.py
+              py_statement: ./check.py
             success: [process-good]
             failure: [quarantine]
         ```

@@ -145,7 +145,7 @@ def test_py_plugin_with_bundle_dags(workflow_repo):
     bundle = LocalBundle(name="etl-repo", path=workflow_repo)
     bundle.load_plugins()
 
-    py_file = str(workflow_repo / "dags" / "transform.py")
+    py_statement = str(workflow_repo / "dags" / "transform.py")
     task_ctx = TaskContext(
         run_id="run-002",
         dag_id="etl-pipeline",
@@ -157,7 +157,7 @@ def test_py_plugin_with_bundle_dags(workflow_repo):
         data_interval_end=datetime(2026, 6, 4),
         params={"source": "gcs"},
         inputs={
-            "py_file": py_file,
+            "py_statement": py_statement,
             "py_function": "main",
             "params": {"source": "gcs"},
         },

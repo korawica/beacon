@@ -86,7 +86,7 @@ def _events(p: Path) -> list[dict]:
 
 def _make_dag(script: Path, events_path: Path) -> Dag:
     """Three tasks, one file, three functions — the documented pattern."""
-    common = {"py_file": str(script)}
+    common = {"py_statement": str(script)}
     ep = str(events_path)
     return Dag(
         id="spark-py",

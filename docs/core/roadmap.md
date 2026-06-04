@@ -319,7 +319,7 @@ runtime + CLI work that enforces it.
       precedence: deployment `--var` > dag `variables.yml` > group
       `global_variables.yml` > bundle `global_variables.yml`.
       Shallow per-top-level-key merge.
-- [x] Asset resolution: `py_file: <name>` tried as
+- [x] Asset resolution: `py_statement: <name>` tried as
       `<dag_folder>/assets/<name>`, then `<bundle_root>/assets/<name>`,
       else `FileNotFoundError`. Absolute paths still resolve.
 - [x] `Deployment.variable_overrides` replaces `variables_ref`;
@@ -336,7 +336,7 @@ runtime + CLI work that enforces it.
       (plus `bundle_root`) into `DagRunner`.
 - [x] `Dag.run()` auto-resolves scoped variables when the loader has
       set `_source_file` + `_bundle_root` (explicit `variables=` wins).
-- [x] `py` plugin resolves `py_file` via bundle-aware asset lookup
+- [x] `py` plugin resolves `py_statement` via bundle-aware asset lookup
       (ContextVar pushed by `DagRunner` — no executor signature change).
 - [x] `beacon sync` emits soft `WARNING` for folders holding more than
       one DAG file.

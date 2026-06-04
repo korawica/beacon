@@ -64,7 +64,7 @@ def workspace(tmp_path):
     }
 
 
-def _ctx(task_id: str, py_file: str) -> TaskContext:
+def _ctx(task_id: str, py_statement: str) -> TaskContext:
     return TaskContext(
         run_id="run-dag-001",
         dag_id="etl-pipeline",
@@ -75,7 +75,11 @@ def _ctx(task_id: str, py_file: str) -> TaskContext:
         data_interval_start=datetime(2026, 6, 3),
         data_interval_end=datetime(2026, 6, 4),
         params={},
-        inputs={"py_file": py_file, "py_function": "main", "params": {}},
+        inputs={
+            "py_statement": py_statement,
+            "py_function": "main",
+            "params": {},
+        },
         plugin_name="py",
     )
 

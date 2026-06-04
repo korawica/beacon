@@ -77,9 +77,9 @@ def tmp_script(tmp_path):
     return _write
 
 
-def _make_task_context(py_file: str, **inputs_override) -> TaskContext:
+def _make_task_context(py_statement: str, **inputs_override) -> TaskContext:
     inputs = {
-        "py_file": py_file,
+        "py_statement": py_statement,
         "py_function": "main",
         "params": {"source_system": "postgres"},
         "env": {},

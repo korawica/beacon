@@ -50,7 +50,7 @@ def workspace(tmp_path):
     }
 
 
-def _make_ctx(py_file: str, retries: int = 0, **params) -> TaskContext:
+def _make_ctx(py_statement: str, retries: int = 0, **params) -> TaskContext:
     return TaskContext(
         run_id="run-001",
         dag_id="test-dag",
@@ -61,7 +61,11 @@ def _make_ctx(py_file: str, retries: int = 0, **params) -> TaskContext:
         data_interval_start=datetime(2026, 6, 3),
         data_interval_end=datetime(2026, 6, 4),
         params=params,
-        inputs={"py_file": py_file, "py_function": "main", "params": params},
+        inputs={
+            "py_statement": py_statement,
+            "py_function": "main",
+            "params": params,
+        },
         plugin_name="py",
         retries=retries,
         retry_delay=0,  # No delay in tests
@@ -239,7 +243,7 @@ def test_worker_retry_flow(workspace):
         data_interval_end=datetime(2026, 6, 4),
         params={},
         inputs={
-            "py_file": str(scripts / "flaky.py"),
+            "py_statement": str(scripts / "flaky.py"),
             "py_function": "main",
             "params": {},
             "env": {"COUNTER_FILE": counter_file},

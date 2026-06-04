@@ -190,7 +190,7 @@ class TestTemplateRendering:
                     id="t1",
                     uses="py",
                     inputs={
-                        "py_file": "./script.py",
+                        "py_statement": "./script.py",
                     },
                 ),
             ],
@@ -198,7 +198,7 @@ class TestTemplateRendering:
         result = dryrun(dag, params={"source": "orders"})
         assert result.is_valid
         t = result.resolved_tasks[0]
-        assert t.inputs["py_file"] == "./script.py"
+        assert t.inputs["py_statement"] == "./script.py"
 
     def test_renders_jinja_params(self):
         dag = Dag(
@@ -304,7 +304,7 @@ class TestDryRunOutput:
                     uses="py",
                     upstream=["start"],
                     inputs={
-                        "py_file": "./process.py",
+                        "py_statement": "./process.py",
                     },
                 ),
             ],

@@ -50,7 +50,7 @@ def workspace(tmp_path):
 
 
 def _make_ctx(
-    run_id: str, task_id: str, py_file: str, logical_date: datetime
+    run_id: str, task_id: str, py_statement: str, logical_date: datetime
 ) -> TaskContext:
     return TaskContext(
         run_id=run_id,
@@ -62,7 +62,11 @@ def _make_ctx(
         data_interval_start=logical_date,
         data_interval_end=logical_date,
         params={},
-        inputs={"py_file": py_file, "py_function": "main", "params": {}},
+        inputs={
+            "py_statement": py_statement,
+            "py_function": "main",
+            "params": {},
+        },
         plugin_name="py",
     )
 

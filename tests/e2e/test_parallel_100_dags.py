@@ -43,7 +43,7 @@ def workspace(tmp_path):
 
 
 def _make_task_ctx(
-    dag_id: str, run_id: str, task_id: str, py_file: str, **params
+    dag_id: str, run_id: str, task_id: str, py_statement: str, **params
 ) -> TaskContext:
     return TaskContext(
         run_id=run_id,
@@ -55,7 +55,11 @@ def _make_task_ctx(
         data_interval_start=datetime(2026, 6, 3),
         data_interval_end=datetime(2026, 6, 4),
         params=params,
-        inputs={"py_file": py_file, "py_function": "main", "params": params},
+        inputs={
+            "py_statement": py_statement,
+            "py_function": "main",
+            "params": params,
+        },
         plugin_name="py",
     )
 
@@ -67,7 +71,7 @@ class TestParallel100Dags:
         """100 different DAGs each with 1 task, all submitted at once."""
         meta = LocalMetadata(workspace["metadata"])
         worker = Worker(meta, max_concurrent=50)
-        py_file = str(workspace["scripts"] / "fast.py")
+        py_statement = str(workspace["scripts"] / "fast.py")
 
         num_dags = 100
         contexts = []
@@ -76,7 +80,7 @@ class TestParallel100Dags:
                 dag_id=f"dag-{i:03d}",
                 run_id=f"run-{i:03d}",
                 task_id="task-main",
-                py_file=py_file,
+                py_statement=py_statement,
                 src_dag=f"dag-{i:03d}",
                 src_task="task-main",
             )
@@ -139,7 +143,7 @@ class TestParallel100Dags:
         """
         meta = LocalMetadata(workspace["metadata"])
         worker = Worker(meta, max_concurrent=50)
-        py_file = str(workspace["scripts"] / "multi_step.py")
+        py_statement = str(workspace["scripts"] / "multi_step.py")
 
         num_dags = 100
         tasks_per_dag = 3
@@ -151,7 +155,7 @@ class TestParallel100Dags:
                     dag_id=f"dag-{i:03d}",
                     run_id=f"run-{i:03d}",
                     task_id="step-0",
-                    py_file=py_file,
+                    py_statement=py_statement,
                     step=0,
                 )
                 await worker.submit(ctx)
@@ -177,7 +181,7 @@ class TestParallel100Dags:
                                 dag_id=f"dag-{i:03d}",
                                 run_id=f"run-{i:03d}",
                                 task_id=f"step-{next_step}",
-                                py_file=py_file,
+                                py_statement=py_statement,
                                 step=next_step,
                             )
                             await worker.submit(ctx)
@@ -225,7 +229,7 @@ class TestParallel100Dags:
     def test_metadata_isolation_across_dags(self, workspace):
         """Verify no data leaks between DAGs writing to metadata concurrently."""
         meta = LocalMetadata(workspace["metadata"])
-        py_file = str(workspace["scripts"] / "fast.py")
+        py_statement = str(workspace["scripts"] / "fast.py")
 
         num_dags = 100
 
@@ -242,7 +246,7 @@ class TestParallel100Dags:
                         dag_id=d_id,
                         run_id=r_id,
                         task_id="task-a",
-                        py_file=py_file,
+                        py_statement=py_statement,
                         src_dag=d_id,
                         src_task="task-a",
                     )

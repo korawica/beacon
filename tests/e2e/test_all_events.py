@@ -110,7 +110,7 @@ def _read_alerts(alert_dir: Path) -> list[dict]:
 
 def _make_task_ctx(
     task_id: str,
-    py_file: str,
+    py_statement: str,
     retries: int = 0,
     env: dict | None = None,
 ) -> TaskContext:
@@ -125,7 +125,7 @@ def _make_task_ctx(
         data_interval_end=datetime(2026, 6, 4),
         params={},
         inputs={
-            "py_file": py_file,
+            "py_statement": py_statement,
             "py_function": "main",
             "params": {},
             "env": env or {},

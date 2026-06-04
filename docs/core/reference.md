@@ -249,7 +249,7 @@ Example `uses: py` flow:
   type: task
   uses: py
   inputs:
-    py_file: ../scripts/transform.py
+    py_statement: ../scripts/transform.py
     py_function: main
     params: { source: "{{ params.source_system }}" }
 ```
@@ -341,7 +341,7 @@ listed IDs run; everything else in `success`+`failure` is SKIPPED.
 - id: check-quality
   type: branch
   uses: py
-  inputs: { py_file: ./scripts/check_quality.py }
+  inputs: { py_statement: ./scripts/check_quality.py }
   success: [process-good]
   failure: [quarantine, alert]
 ```
@@ -355,7 +355,7 @@ Returns `{"continue": True|False}`. False → SKIP all downstream
 - id: should-run-today
   type: short_circuit
   uses: py
-  inputs: { py_file: ./scripts/check_if_needed.py }
+  inputs: { py_statement: ./scripts/check_if_needed.py }
 ```
 
 ### 5.5 Group
@@ -368,8 +368,8 @@ runner. Use to organize visually and apply shared upstream deps.
   type: group
   upstream: [start]
   actions:
-    - { id: extract-customers, type: task, uses: py, inputs: { py_file: ./extract_customers.py } }
-    - { id: extract-orders,    type: task, uses: py, inputs: { py_file: ./extract_orders.py } }
+    - { id: extract-customers, type: task, uses: py, inputs: { py_statement: ./extract_customers.py } }
+    - { id: extract-orders,    type: task, uses: py, inputs: { py_statement: ./extract_orders.py } }
 ```
 
 ### Downstream scheduling per action type
@@ -599,7 +599,7 @@ Same effect via `py` plugin:
 - id: process
   uses: py
   inputs:
-    py_file: ./spark.py
+    py_statement: ./spark.py
     py_function: main
     py_teardown: cleanup       # ← always runs after main()
 ```
@@ -769,7 +769,7 @@ Trigger: scheduler resolves vars against scoped chain
    → TaskContext.params = {source: "postgres", bucket: "my-prod-bucket"}
 
 DAG action: inputs templated, then resolved
-   extract.inputs   = {py_file: "./extract.py", table: "postgres_events",
+   extract.inputs   = {py_statement: "./extract.py", table: "postgres_events",
                        date: datetime(2026, 6, 4, ...)}
    transform.inputs = {rows: 42}      # ← outputs.extract.row_count
 ```
@@ -919,13 +919,13 @@ YAML access:
 ```yaml
 - id: extract
   uses: py
-  inputs: { py_file: ./scripts/extract.py }
+  inputs: { py_statement: ./scripts/extract.py }
 
 - id: transform
   uses: py
   upstream: [extract]
   inputs:
-    py_file: ./scripts/transform.py
+    py_statement: ./scripts/transform.py
     params: { file_count: "{{ outputs.extract.row_count }}" }
 ```
 

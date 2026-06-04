@@ -21,14 +21,14 @@ class ShortCircuit(BaseAction):
             type: short_circuit
             uses: py
             inputs:
-              py_file: ./check_if_needed.py
+              py_statement: ./check_if_needed.py
 
           - id: expensive-etl
             upstream: [should-run]
             type: task
             uses: py
             inputs:
-              py_file: ./etl.py
+              py_statement: ./etl.py
         ```
     """
 

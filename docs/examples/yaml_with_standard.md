@@ -26,7 +26,7 @@ tasks:
     upstream: [start]
     uses: py
     inputs:
-      py_file: ./example_py_file.py
+      py_statement: ./example_py_statement.py
       py_function: main
       params:
         source_system: "{{ params.source_system }}"
@@ -36,7 +36,7 @@ tasks:
 
 ## Defining Python File
 
-```python title="example_py_file.py"
+```python title="example_py_statement.py"
 from google.storage import Client
 
 def main(source_system: str):

@@ -1,6 +1,6 @@
 """Python Plugin.
 
-Executes a user-defined Python function from a file.
+Executes a user-defined Python function from a file or inline code string.
 
 Usage (YAML):
     tasks:
@@ -8,10 +8,19 @@ Usage (YAML):
         type: task
         uses: py
         inputs:
-          py_file: ./my_script.py
-          py_function: main          # optional, defaults to "main"
+          py_statement: ./my_script.py    # File path (ends with .py)
+          py_function: main               # optional, defaults to "main"
           params:
             source_system: "{{ params.source_system }}"
+
+      - id: inline
+        type: task
+        uses: py
+        inputs:
+          py_statement: |
+            def main():
+                return {"status": "done"}
+          py_function: main
 
 The user's function is called with `params` as keyword arguments.
 Inside the function, `load_context()` provides access to logger, run_id, etc.
@@ -23,6 +32,15 @@ User file example:
         ctx = load_context()
         ctx.logger.info("Processing %s", source_system)
         return {"rows_processed": 100}
+
+Template rendering in files:
+    When py_statement ends with .py, the file contents are rendered with Jinja.
+    Use {{ params.x }} to inject values, or {{{{ params.x }}}} for literal braces.
+
+    # transform.py
+    def main():
+        source = "{{ params.source }}"  # Rendered to actual value
+        return {"source": source}
 """
 
 import asyncio
@@ -52,8 +70,9 @@ logger = logging.getLogger("beacon.plugin.py")
 class PythonPlugin(BasePlugin):
     """Python Plugin.
 
-    Executes a Python function from a file. The function receives `params`
-    as keyword arguments and can access runtime context via `load_context()`.
+    Executes a Python function from a file or inline code string. The function
+    receives `params` as keyword arguments and can access runtime context via
+    `load_context()`.
 
     !!! example
 
@@ -63,7 +82,7 @@ class PythonPlugin(BasePlugin):
             type: task
             uses: py
             inputs:
-              py_file: ./example.py
+              py_statement: ./example.py
               py_function: main
               params:
                 source_system: my_source
@@ -71,11 +90,14 @@ class PythonPlugin(BasePlugin):
     """
 
     plugin_name: ClassVar[str] = "py"
+    template_ext: ClassVar[tuple[str, ...]] = (".py",)
 
-    py_file: str = Field(description="Path to the Python file to execute")
+    py_statement: str = Field(
+        description="Path to Python file (ending in .py) or inline Python code string"
+    )
     py_function: str = Field(
         default="main",
-        description="Function name to call in the Python file",
+        description="Function name to call in the Python file or code",
     )
     py_teardown: str | None = Field(
         default=None,
@@ -94,15 +116,29 @@ class PythonPlugin(BasePlugin):
         """Execute the user's Python function.
 
         Steps:
-            1. Set environment variables
-            2. Set runtime context (available via load_context())
-            3. Import the Python file as a module
-            4. Call the target function with params as kwargs
-            5. Return the result (if dict) as task outputs
+            1. Determine if py_statement is a file path or inline code
+            2. If file: load, render with Jinja, and prepare for execution
+            3. If inline: render with Jinja and prepare for execution
+            4. Set environment variables
+            5. Set runtime context (available via load_context())
+            6. Execute the code
+            7. Call the target function with params as kwargs
+            8. Return the result (if dict) as task outputs
         """
-        # Resolve file path via the bundle-aware asset lookup
-        # (local dag assets first, then bundle-global assets, else raise).
-        py_path = resolve_asset(self.py_file)
+        # Determine if we have a file path or inline code
+        is_file = self.py_statement.strip().endswith(".py")
+
+        if is_file:
+            # File path: resolve via bundle-aware asset lookup
+            py_path = resolve_asset(self.py_statement)
+            code = py_path.read_text()
+        else:
+            # Inline code: use as-is (no file resolution)
+            code = self.py_statement
+            py_path = None
+
+        # Render the code with Jinja (for both file and inline cases)
+        rendered_code = self._render_code(code, context)
 
         # Set environment variables
         original_env: dict[str, str | None] = {}
@@ -130,24 +166,29 @@ class PythonPlugin(BasePlugin):
         _set_runtime_context(runtime_ctx)
 
         try:
-            # Import the Python file as a module
-            module = self._import_file(py_path)
+            # Execute the code and get the module
+            if is_file and py_path:
+                module = self._import_file(py_path, rendered_code)
+                source_name = py_path.name
+            else:
+                module = self._import_code(rendered_code)
+                source_name = "<inline>"
 
             # Get the target function
             func = getattr(module, self.py_function, None)
             if func is None:
                 raise AttributeError(
-                    f"Function {self.py_function!r} not found in {py_path.name}"
+                    f"Function {self.py_function!r} not found in {source_name}"
                 )
             if not callable(func):
                 raise TypeError(
-                    f"{self.py_function!r} in {py_path.name} is not callable"
+                    f"{self.py_function!r} in {source_name} is not callable"
                 )
 
             # Call the function with params as kwargs
             logger.info(
                 "Executing %s:%s with params=%s",
-                py_path.name,
+                source_name,
                 self.py_function,
                 list(self.params.keys()),
             )
@@ -171,26 +212,98 @@ class PythonPlugin(BasePlugin):
             _clear_runtime_context()
 
     @staticmethod
-    def _import_file(path: Path):
-        """Import a Python file as a module without polluting sys.modules."""
+    def _render_code(code: str, context: Context) -> str:
+        """Render code string with Jinja.
+
+        Uses the same Renderer as the scheduler but for code contents.
+        Supports both file contents and inline code.
+
+        Args:
+            code: Python code string with optional Jinja templates
+            context: Runtime context with params, vars, outputs, runtime
+
+        Returns:
+            Rendered code string with Jinja templates resolved
+        """
+        from beacon.core.renderer import Renderer
+
+        renderer = Renderer(
+            {
+                "params": context.get("params", {}),
+                "vars": lambda n: context.get("vars", {}).get(
+                    n, f"<unresolved: vars('{n}')>"
+                ),
+                "runtime": context.get("runtime", {}),
+                "outputs": context.get("upstream_outputs", {}),
+            }
+        )
+        return renderer.render(code)
+
+    @staticmethod
+    def _import_file(path: Path, rendered_code: str | None = None):
+        """Import a Python file as a module without polluting sys.modules.
+
+        Args:
+            path: Path to the Python file
+            rendered_code: If provided, use this rendered code instead of
+                reading from file. Useful when code was pre-rendered with Jinja.
+        """
         module_name = f"_beacon_user_{path.stem}"
-        spec = importlib.util.spec_from_file_location(module_name, path)
-        if spec is None or spec.loader is None:
-            raise ImportError(f"Cannot load module from {path}")
 
-        # Add parent dir to sys.path so relative imports in user file work
-        parent = str(path.parent)
-        added_to_path = parent not in sys.path
-        if added_to_path:
-            sys.path.insert(0, parent)
+        if rendered_code is not None:
+            # Use rendered code directly via exec
+            module = type(sys)(module_name)
+            module.__file__ = str(path)
+            module.__dict__["__name__"] = module_name
 
-        try:
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            return module
-        finally:
+            # Add parent dir to sys.path so relative imports work
+            parent = str(path.parent)
+            added_to_path = parent not in sys.path
             if added_to_path:
-                sys.path.remove(parent)
+                sys.path.insert(0, parent)
+
+            try:
+                exec(rendered_code, module.__dict__)
+                return module
+            finally:
+                if added_to_path:
+                    sys.path.remove(parent)
+        else:
+            # Original behavior: load from file
+            spec = importlib.util.spec_from_file_location(module_name, path)
+            if spec is None or spec.loader is None:
+                raise ImportError(f"Cannot load module from {path}")
+
+            parent = str(path.parent)
+            added_to_path = parent not in sys.path
+            if added_to_path:
+                sys.path.insert(0, parent)
+
+            try:
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                return module
+            finally:
+                if added_to_path:
+                    sys.path.remove(parent)
+
+    @staticmethod
+    def _import_code(code: str):
+        """Import inline Python code as a module.
+
+        Args:
+            code: Python code string (already rendered with Jinja if needed)
+        """
+        import uuid
+
+        module_name = f"_beacon_inline_{uuid.uuid4().hex[:8]}"
+
+        module = type(sys)(module_name)
+        module.__file__ = "<inline>"
+        module.__dict__["__name__"] = module_name
+
+        exec(code, module.__dict__)
+        return module
 
     async def teardown(self, context: Context) -> None:
         """Call ``py_teardown`` function if declared.
@@ -201,11 +314,22 @@ class PythonPlugin(BasePlugin):
         if not self.py_teardown:
             return
 
-        try:
-            py_path = resolve_asset(self.py_file)
-        except FileNotFoundError as exc:
-            logger.warning("Teardown skipped: %s", exc)
-            return
+        # Determine if we have a file path or inline code
+        is_file = self.py_statement.strip().endswith(".py")
+
+        if is_file:
+            try:
+                py_path = resolve_asset(self.py_statement)
+            except FileNotFoundError as exc:
+                logger.warning("Teardown skipped: %s", exc)
+                return
+            code = py_path.read_text()
+        else:
+            code = self.py_statement
+            py_path = None
+
+        # Render the code with Jinja
+        rendered_code = self._render_code(code, context)
 
         # Re-set runtime context so teardown function can use load_context()
         task_logger = logging.getLogger(
@@ -227,18 +351,22 @@ class PythonPlugin(BasePlugin):
         _set_runtime_context(runtime_ctx)
 
         try:
-            module = self._import_file(py_path)
+            if is_file and py_path:
+                module = self._import_file(py_path, rendered_code)
+            else:
+                module = self._import_code(rendered_code)
+
             func = getattr(module, self.py_teardown, None)
             if func is None:
+                source_name = py_path.name if py_path else "<inline>"
                 logger.warning(
                     "Teardown function %r not found in %s",
                     self.py_teardown,
-                    py_path.name,
+                    source_name,
                 )
                 return
-            logger.info(
-                "Running teardown %s:%s", py_path.name, self.py_teardown
-            )
+            source_name = py_path.name if py_path else "<inline>"
+            logger.info("Running teardown %s:%s", source_name, self.py_teardown)
             result = func(**self.params)
             if asyncio.iscoroutine(result):
                 await result
