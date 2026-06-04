@@ -76,6 +76,10 @@ class PythonPlugin(BasePlugin):
         default="main",
         description="Function name to call in the Python file",
     )
+    py_teardown: str | None = Field(
+        default=None,
+        description="Function name to call as teardown (always, after success or failure)",
+    )
     params: dict[str, Any] = Field(
         default_factory=dict,
         description="Keyword arguments passed to the function",
@@ -187,3 +191,55 @@ class PythonPlugin(BasePlugin):
         finally:
             if added_to_path:
                 sys.path.remove(parent)
+
+    async def teardown(self, context: Context) -> None:
+        """Call ``py_teardown`` function if declared.
+
+        Runs ALWAYS after execute — success, failure, or timeout.
+        Has access to the same ``load_context()`` runtime context.
+        """
+        if not self.py_teardown:
+            return
+
+        py_path = Path(self.py_file).resolve()
+        if not py_path.exists():
+            logger.warning("Teardown skipped: file not found %s", py_path)
+            return
+
+        # Re-set runtime context so teardown function can use load_context()
+        task_logger = logging.getLogger(
+            f"beacon.task.{context.get('dag_id', '')}.{context.get('task_id', '')}"
+        )
+        runtime_ctx = RuntimeContext(
+            run_id=context.get("run_id", ""),
+            dag_id=context.get("dag_id", ""),
+            task_id=context.get("task_id", ""),
+            attempt_number=context.get("attempt_number", 1),
+            params=self.params,
+            upstream_outputs=context.get("upstream_outputs", {}),
+            run_date=context.get("run_date"),
+            logical_date=context.get("logical_date"),
+            data_interval_start=context.get("data_interval_start"),
+            data_interval_end=context.get("data_interval_end"),
+            logger=task_logger,
+        )
+        set_runtime_context(runtime_ctx)
+
+        try:
+            module = self._import_file(py_path)
+            func = getattr(module, self.py_teardown, None)
+            if func is None:
+                logger.warning(
+                    "Teardown function %r not found in %s",
+                    self.py_teardown,
+                    py_path.name,
+                )
+                return
+            logger.info(
+                "Running teardown %s:%s", py_path.name, self.py_teardown
+            )
+            result = func(**self.params)
+            if asyncio.iscoroutine(result):
+                await result
+        finally:
+            clear_runtime_context()

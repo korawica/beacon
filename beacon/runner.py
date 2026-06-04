@@ -522,8 +522,11 @@ class DagRunner:
         try:
             rendered_inputs = renderer.render(merged_inputs)
         except Exception as exc:  # noqa: BLE001
-            logger.error(
-                "Failed to render inputs for %s/%s: %s",
+            # Expected when inputs contain {{ outputs.X.Y }} — these are
+            # resolved in the worker's second-pass render after upstream
+            # outputs become available. Not an error.
+            logger.debug(
+                "First-pass render deferred for %s/%s: %s",
                 self.dag.id,
                 tid,
                 exc,
@@ -705,25 +708,24 @@ class DagRunner:
         run_id: str,
         task_ids: str | list[str],
     ) -> dict[str, list[str]]:
-        """Force-fail task(s) and re-fire affected teardowns.
+        """Force-fail task(s). Shorthand for ``mark(state=TaskState.FAILED)``."""
+        return await self.mark(
+            run_id=run_id, task_ids=task_ids, state=TaskState.FAILED
+        )
 
-        Use when a task is stuck or known-bad and you want beacon to
-        clean up the resource (via the teardown) instead of retrying.
+    async def mark(
+        self,
+        *,
+        run_id: str,
+        task_ids: str | list[str],
+        state: TaskState,
+    ) -> dict[str, list[str]]:
+        """Force task(s) to a terminal state and re-fire affected teardowns.
 
-        Semantics:
-            1. Mark each task as ``FAILED`` in metadata.
-            2. Auto-clear any teardown whose dep set includes a failed task.
-            3. Resume the run so only the cleared teardowns execute.
+        Works for ``FAILED``, ``SUCCESS``, or ``SKIPPED``.
 
         Returns:
-            ``{"failed": [...], "teardowns_cleared": [...]}``.
-
-        Example::
-
-            runner = DagRunner(dag, meta=meta)
-            await runner.fail(run_id="manual-spark-x", task_ids="process")
-            await runner.run(run_id="manual-spark-x", resume=True)
-            # → `stop` teardown fires; everything else stays as-is.
+            ``{"marked": [...], "teardowns_cleared": [...]}``.
         """
         if isinstance(task_ids, str):
             task_ids = [task_ids]
@@ -735,28 +737,30 @@ class DagRunner:
                     f"Task {tid!r} not found in DAG {self.dag.id!r}"
                 )
 
-        # 1. Mark tasks as FAILED.
+        # 1. Set state for each task.
         for tid in task_ids:
-            await self.meta.set_task_state(
-                run_id, self.dag.id, tid, TaskState.FAILED
-            )
+            await self.meta.set_task_state(run_id, self.dag.id, tid, state)
 
-        # 2. Auto-clear teardowns whose dep set intersects failed tasks.
-        failed_set = set(task_ids)
+        # 2. Auto-clear teardowns whose dep set intersects the marked tasks.
+        # Skip any teardown that was itself explicitly marked (don't undo it).
+        marked_set = set(task_ids)
         teardowns_cleared: list[str] = []
         for teardown_id, deps in graph.teardown_deps.items():
-            if deps & failed_set:
+            if teardown_id in marked_set:
+                continue
+            if deps & marked_set:
                 await self.meta.clear_task(run_id, self.dag.id, teardown_id)
                 teardowns_cleared.append(teardown_id)
 
         logger.info(
-            "Force-failed %s in run %s/%s; teardowns cleared: %s",
+            "Marked %s as %s in run %s/%s; teardowns cleared: %s",
             task_ids,
+            state.value,
             self.dag.id,
             run_id,
             teardowns_cleared,
         )
-        return {"failed": task_ids, "teardowns_cleared": teardowns_cleared}
+        return {"marked": task_ids, "teardowns_cleared": teardowns_cleared}
 
 
 def _collect_self_and_downstream(

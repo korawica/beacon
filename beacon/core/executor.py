@@ -166,4 +166,16 @@ class LocalExecutor(BaseExecutor):
                 error_traceback=traceback.format_exc(),
             )
 
+        finally:
+            # Always call plugin.teardown() — resource cleanup hook.
+            try:
+                await plugin_instance.teardown(context)
+            except Exception as td_exc:  # noqa: BLE001
+                logger.warning(
+                    "Plugin teardown error for %s/%s: %s",
+                    task_ctx.dag_id,
+                    task_ctx.task_id,
+                    td_exc,
+                )
+
         return task_ctx

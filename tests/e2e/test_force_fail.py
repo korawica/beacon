@@ -123,7 +123,7 @@ def test_force_fail_process_fires_teardown(tmp_path):
     info = asyncio.run(
         runner.fail(run_id="manual-spark-fail-1", task_ids="process")
     )
-    assert info["failed"] == ["process"]
+    assert info["marked"] == ["process"]
     assert info["teardowns_cleared"] == ["stop"]
 
     # Verify metadata: process=FAILED, stop=NONE (cleared).
@@ -227,7 +227,7 @@ def test_force_fail_multiple_tasks(tmp_path):
         task_id=["launch", "process"],
         metadata_path=meta_path,
     )
-    assert set(out["failed"]) == {"launch", "process"}
+    assert set(out["marked"]) == {"launch", "process"}
     assert out["teardowns_fired"] == ["stop"]
     # Teardown fired once (not twice).
     assert len([e for e in _EVENTS if e.startswith("stop:")]) == 1

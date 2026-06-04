@@ -174,44 +174,73 @@ class Dag(BaseModel):
     ) -> dict[str, Any]:
         """Force-fail task(s) and re-fire affected teardowns.
 
-        Use when a task is stuck or known-bad and you want the resource
-        cleanup (teardown) to fire instead of retrying.
+        Shorthand for ``dag.mark(state="failed", ...)``.
+        """
+        return self.mark(
+            run_id=run_id,
+            task_id=task_id,
+            state="failed",
+            metadata_path=metadata_path,
+            max_concurrent=max_concurrent,
+        )
 
-        Semantics:
-            1. Mark each task as FAILED.
-            2. Auto-clear any teardown whose dependency set includes the
-               failed task.
-            3. Resume the run → only the affected teardowns execute.
+    def mark(
+        self,
+        *,
+        run_id: str,
+        task_id: str | list[str],
+        state: str,
+        metadata_path: str,
+        max_concurrent: int = 10,
+    ) -> dict[str, Any]:
+        """Force a task to a terminal state and re-fire affected teardowns.
+
+        Use when a task is stuck, or you know externally it's done:
+            - ``state="failed"`` → kill and clean up
+            - ``state="success"`` → mark done, unblock downstream
+
+        In both cases, any task-level teardown whose dep set includes the
+        marked task is auto-cleared and re-fires on resume.
 
         Returns:
-            Same shape as :meth:`run`, plus ``"failed"`` and
+            Same shape as :meth:`run`, plus ``"marked"`` and
             ``"teardowns_fired"`` keys.
 
         Example::
 
-            dag.run(metadata_path="./meta", ...)                 # running
-            dag.fail(run_id="manual-spark-x", task_id="process",
+            dag.mark(run_id=..., task_id="process", state="failed",
                      metadata_path="./meta")
-            # → teardown `stop` fires; `launch` stays SUCCESS.
+            dag.mark(run_id=..., task_id="sensor", state="success",
+                     metadata_path="./meta")
         """
+        from ..core.state import TaskState
         from ..metadata.json_store import JsonMetadata
         from ..runner import DagRunner
+
+        valid_states = {"failed", "success", "skipped"}
+        if state not in valid_states:
+            raise ValueError(
+                f"state must be one of {valid_states}, got {state!r}"
+            )
+        target_state = TaskState(state)
 
         meta = JsonMetadata(metadata_path)
         runner = DagRunner(self, meta=meta, max_concurrent=max_concurrent)
 
-        async def _fail_and_resume():
-            info = await runner.fail(run_id=run_id, task_ids=task_id)
+        async def _mark_and_resume():
+            info = await runner.mark(
+                run_id=run_id, task_ids=task_id, state=target_state
+            )
             result = await runner.run(run_id=run_id, resume=True)
             return info, result
 
-        info, result = asyncio.run(_fail_and_resume())
+        info, result = asyncio.run(_mark_and_resume())
         return {
             "run_id": result.run_id,
             "state": result.state,
             "states": dict(result.states),
             "outputs": dict(result.outputs),
-            "failed": info["failed"],
+            "marked": info["marked"],
             "teardowns_fired": info["teardowns_cleared"],
         }
 

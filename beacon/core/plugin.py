@@ -126,3 +126,13 @@ class BasePlugin(BaseModel, ABC, metaclass=PluginMeta):
         raise NotImplementedError(
             "The execute method of BasePlugin is not implemented."
         )
+
+    async def teardown(self, context: Context) -> None:
+        """Plugin teardown — runs ALWAYS after execute (success or failure).
+
+        Override to clean up resources the plugin acquired during execute.
+        Called by the executor in a finally block. Errors here are logged
+        but do not change the task's outcome.
+
+        Default: no-op.
+        """
