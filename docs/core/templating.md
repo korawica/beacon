@@ -1,336 +1,270 @@
 # Templating
 
-This document describes how the Beacon template system works, including the
-rendering pipeline, available macros, and how values flow from variables through
-to task inputs at execution time.
-
----
-
-## Overview
-
-Beacon uses [Jinja2](https://jinja.palletsprojects.com/) for **value interpolation only** —
-not control flow. Templates are resolved at deploy/trigger time so that by the time a task
-reaches the executor, all inputs contain fully concrete values.
+Beacon uses [Jinja2](https://jinja.palletsprojects.com/) for **value
+interpolation only** — not control flow. Templates resolve to concrete
+values *before* a plugin executes; plugins never see Jinja syntax.
 
 ```yaml
-# ✅ Supported: value interpolation
+# ✅ Supported in DAG inputs
 inputs:
   source: "{{ params.source_system }}"
-  path: "{{ params.base_path }}/{{ params.date }}"
+  path:   "{{ params.base_path }}/{{ params.date }}"
   bucket: "{{ vars('gcs_bucket') }}"
+  rows:   "{{ outputs.extract.row_count }}"
 
-# ❌ NOT supported in DAG definitions (by design)
-{% for item in items %}   # No control flow
-{% if env == 'prod' %}    # No conditionals
+# ❌ Intentionally not supported (control flow in graph definitions)
+{% for item in items %}        # use foreach_task instead (Phase 3)
+{% if env == 'prod' %}          # use a Branch action instead
 ```
 
-**Why no control flow?** — Control flow in DAG definitions creates unpredictable
-graph shapes that cannot be statically validated, versioned, or displayed in a
-UI before execution. Use `for_each` for dynamic fan-out instead.
+**Why no control flow?** Graphs whose shape depends on Jinja conditions
+can't be statically validated, versioned, or shown in a UI before
+execution. Use [`Branch`](../examples/yaml_with_standard.md) for
+fork-on-condition and `foreach_task` for fan-out.
 
 ---
 
-## Rendering Pipeline
+## The Renderer
 
-Templates are resolved in two passes before execution:
-
-```text
-Deploy/Trigger Time                      Pre-Execute (Scheduler)
-────────────────────                     ───────────────────────
-variables.yml                            TaskContext.params
-    │                                        │
-    v                                        v
-vars() resolved against                  params.* resolved against
-variable store (per stage)               TaskContext.params
-    │                                        │
-    v                                        v
-deployment.params = {                    TaskContext.inputs = {
-  source: "postgres"  ← was "{{vars}}"    table: "postgres"  ← was "{{params}}"
-}                                        }
-```
-
-### Pass 1: `vars()` → `params` (at trigger time)
-
-Variables from `variables.yml` (stage-specific) are resolved into Deployment params:
-
-```yaml
-# variables.yml
-stages:
-  prod:
-    source_system: postgres
-    gcs_bucket: my-prod-bucket
-  dev:
-    source_system: sqlite
-    gcs_bucket: my-dev-bucket
-```
-
-```yaml
-# deployment params (before rendering)
-params:
-  source: "{{ vars('source_system') }}"
-  bucket: "{{ vars('gcs_bucket') }}"
-
-# After Pass 1 (trigger in prod stage):
-params:
-  source: "postgres"
-  bucket: "my-prod-bucket"
-```
-
-### Pass 2: `params.*` → `inputs` (pre-execute in scheduler)
-
-Task inputs referencing `params` are resolved into concrete values stored in TaskContext:
-
-```yaml
-# Action definition
-actions:
-  - id: extract
-    uses: py
-    inputs:
-      py_file: ./scripts/extract.py
-      params:
-        source: "{{ params.source }}"
-        bucket: "{{ params.bucket }}/raw"
-
-# After Pass 2 (stored in TaskContext.inputs):
-inputs:
-  py_file: "./scripts/extract.py"
-  params:
-    source: "postgres"
-    bucket: "my-prod-bucket/raw"
-```
-
-### Pass 3: `outputs.*` → `inputs` (upstream output references)
-
-Downstream tasks can reference upstream outputs via the `outputs` namespace:
-
-```yaml
-actions:
-  - id: transform
-    uses: py
-    upstream: [extract]
-    inputs:
-      py_file: ./scripts/transform.py
-      params:
-        row_count: "{{ outputs.extract.row_count }}"
-```
-
-These are resolved at execution time when the worker populates `upstream_outputs`.
-
----
-
-## Available Template Macros
-
-| Macro                 | Scope  | Description                                |
-|-----------------------|--------|--------------------------------------------|
-| `vars('key')`         | Pass 1 | Reads from stage variables (variables.yml) |
-| `params.key`          | Pass 2 | Reads from resolved DAG params             |
-| `outputs.task_id.key` | Pass 3 | Reads from upstream task outputs           |
-
-### Built-in Variables (available in all templates)
-
-These are automatically available when templates are rendered:
-
-| Variable       | Type     | Description                            |
-|----------------|----------|----------------------------------------|
-| `params.*`     | dict     | All DAG params (after vars resolution) |
-| `vars('name')` | function | Lookup function for stage variables    |
-
----
-
-## How It Works Internally
-
-### Components
-
-```text
-┌─────────────────────────────────────────────────────────────┐
-│                    Template System                            │
-├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│  JinjaRender (beacon.core.renderer)                          │
-│  ├── Creates Jinja2 Environment (NativeEnvironment)          │
-│  ├── Manages user_defined_macros (vars, params, etc.)        │
-│  ├── Manages user_defined_filters                            │
-│  └── Renders any value recursively (str, dict, list, tuple)  │
-│                                                              │
-│  Templater (beacon.core.templater)                           │
-│  ├── Pydantic BaseModel mixin                                │
-│  ├── Declares template_fields (which fields to render)       │
-│  ├── model_validator(mode="before") triggers rendering       │
-│  └── Renders declared fields before Pydantic validation      │
-│                                                              │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### JinjaRender
-
-The core rendering engine. Wraps Jinja2 with:
-
-- **NativeEnvironment** (default): Returns Python native types (int, list, dict)
-  instead of always returning strings. `"{{ 42 }}"` → `42` (int), not `"42"`.
-- **SandboxedEnvironment** (optional): For untrusted templates.
-- **Recursive rendering**: Traverses dicts, lists, tuples, and sets to render
-  any nested string containing `{{ ... }}`.
+One class — `beacon.core.Renderer` — handles every template in beacon.
 
 ```python
-from beacon.core.renderer import JinjaRender
+from beacon.core import Renderer
 
-renderer = JinjaRender(
-    user_defined_macros={
-        "params": {"source": "postgres", "date": "2026-06-03"},
-        "vars": lambda key: variables.get(key),
-    },
-)
-
-# Renders a nested structure
-result = renderer.render({
-    "table": "{{ params.source }}_events",
-    "date": "{{ params.date }}",
-    "count": "{{ 5 * 10 }}",
+r = Renderer({
+    "params":   {"source": "postgres", "date": "2026-06-04"},
+    "vars":     lambda name: my_variables.get(name),
+    "outputs":  {"extract": {"row_count": 42}},
+    "runtime":  {...},
 })
-# → {"table": "postgres_events", "date": "2026-06-03", "count": 50}
+
+r.render("{{ params.source }}")                   # "postgres"
+r.render({"q": "SELECT * FROM {{ params.source }}_t"})
+# → {"q": "SELECT * FROM postgres_t"}
+r.render(["x", "{{ params.date }}", 5])
+# → ["x", "2026-06-04", 5]
 ```
 
-### Templater (Pydantic Mixin)
+Properties:
 
-Any Pydantic model that extends `Templater` gets automatic template rendering
-on declared fields **before** Pydantic validation runs:
+- **Recursive.** Walks `dict`, `list`, `tuple`. Non-string scalars pass
+  through unchanged.
+- **Native-typed.** Pure expressions return real Python types — `"{{ 5 + 5 }}"`
+  → `int(10)`, `"{{ [1, 2] }}"` → `list`, `"{{ x }}"` with `x=None`
+  → `None`. Mixed templates (`"prefix-{{ x }}"`) stay strings.
+- **Sandboxed.** Dunder / attribute attacks (`{{ x.__class__.__mro__ }}`)
+  raise `SecurityError`. `is_safe_attribute` / `is_safe_callable` from
+  `jinja2.sandbox.SandboxedEnvironment` apply.
+- **Strict undefined.** `{{ missing }}` raises `UndefinedError` — typos
+  fail loudly, not silently.
+- **Module-level template cache** (size 400) — repeated renders of the
+  same string skip re-parsing.
 
-```python
-from typing import ClassVar
-from beacon.core.templater import Templater
-
-class MyPlugin(Templater):
-    template_fields: ClassVar[tuple[str, ...]] = ("source", "target")
-
-    source: str
-    target: str
-    retries: int  # Not in template_fields — never rendered
-```
-
-When this model is validated with a `jinja_renderer` in context:
-
-```python
-plugin = MyPlugin.model_validate(
-    {"source": "{{ params.db }}", "target": "output", "retries": 3},
-    context={"jinja_renderer": renderer},
-)
-# plugin.source = "postgres"  (rendered)
-# plugin.target = "output"    (no template, unchanged)
-# plugin.retries = 3          (not in template_fields, unchanged)
-```
-
-### Template Field Extensions
-
-For fields that reference template **files** (e.g., SQL files):
-
-```python
-class SqlPlugin(Templater):
-    template_fields: ClassVar[tuple[str, ...]] = ("query",)
-    template_fields_ext: ClassVar[dict[str, tuple[str, ...]]] = {
-        "query": (".sql", ".jinja2"),
-    }
-
-    query: str
-```
-
-When `query = "transform.sql"` and the file extension matches, the renderer
-loads the file from `template_searchpath` and renders it as a Jinja template.
+`Renderer` is the only Jinja contact point in beacon. There is no plugin
+mixin, no `template_fields` declaration, no `@renderable` decorator.
+Plugins receive already-resolved values via `Context.params` and the
+inputs you set on `Task(inputs={...})`.
 
 ---
 
-## Global Variables Protection
+## Available Namespaces
 
-The system detects unresolved global variables (`glob_*` pattern) and raises
-an error rather than silently passing broken templates:
+| Namespace                | When                              | What                                                         |
+|--------------------------|-----------------------------------|--------------------------------------------------------------|
+| `params.KEY`             | trigger time → enqueue            | Concrete `TaskContext.params` (Deployment params merged with overrides) |
+| `vars('KEY')`            | trigger time → enqueue            | Lookup into the active stage of `variables.yml`              |
+| `outputs.TASK_ID.KEY`    | pre-execute (worker, late-bind)   | Dict outputs returned by an upstream task                    |
+| `runtime.KEY`            | trigger time → enqueue            | Run identity + time (see below)                              |
 
-```python
-# If vars('glob_start_date') is not set, this raises ValueError:
-# "The Global variables 'glob_start_date' are not settled yet."
-```
+### `runtime.*` fields
 
-This ensures misconfigured variables are caught at deploy/trigger time, not
-at execution time when debugging is harder.
+All present in every render context:
+
+| Key                       | Type        | Notes                                                |
+|---------------------------|-------------|------------------------------------------------------|
+| `run_id`                  | `str`       | DagRun id (`manual-…`, `scheduled-…`, `backfill-…`)  |
+| `dag_id`                  | `str`       |                                                      |
+| `task_id`                 | `str`       |                                                      |
+| `run_date`                | `datetime`  | Wall-clock at trigger                                |
+| `logical_date`            | `datetime`  | = `data_interval_start` for cron runs                |
+| `data_interval_start`     | `datetime`  |                                                      |
+| `data_interval_end`       | `datetime`  |                                                      |
+| `attempt_number`          | `int`       | 1-based; bumped on retry                             |
+
+### Unresolved `vars()` is non-fatal
+
+If a `vars('foo')` key isn't in the active stage, the renderer
+substitutes the sentinel string `<unresolved: vars('foo')>` instead of
+raising. This lets `beacon dryrun` show templates with partial stage
+data and surfaces missing keys in a single readable place rather than
+blowing up the first time they're referenced.
+
+Unresolved `params.*`, `outputs.*`, and `runtime.*` **do** raise (typed
+typos must fail loudly).
 
 ---
 
-## Resolution Timeline Summary
+## Render Pipeline (where each pass happens)
+
+There is no abstract "Pass 1 / Pass 2" — there are two distinct binding
+*sites* in the runtime, plus dryrun:
 
 ```text
-Deploy time              Trigger time            Pre-execute            Execute time
-────────────             ────────────            ───────────            ────────────
-variables.yml parsed     vars() resolved         params.* resolved      Plugin receives
-  │                        │                       │                    final concrete
-  v                        v                       v                    values from
-stages:                  deployment.params =     TaskContext.inputs =   Context dict
-  prod:                  {                       {                      (no Jinja
-    source: postgres       source: "postgres"      table: "postgres"     rendering)
-    bucket: my-bucket      bucket: "my-bucket"     path: "my-bucket/x"
-                         }                       }
+┌──────────────────────────────────────────────────────────────────────┐
+│  1. Trigger-time render        beacon/runner.py: _submit_action      │
+│     ────────────────────                                              │
+│     ctx = {params, vars, runtime, outputs={}}                         │
+│     rendered = Renderer(ctx).render(task.inputs)                      │
+│     → stored on TaskContext.inputs                                    │
+│                                                                       │
+│     Anything that fails here (typically because the input references  │
+│     outputs.* of an upstream that hasn't run) is left untouched and   │
+│     re-tried at site 2.                                               │
+├──────────────────────────────────────────────────────────────────────┤
+│  2. Pre-execute render         beacon/worker.py: _resolve_upstream_   │
+│     ────────────────────                         outputs              │
+│     Just before the worker calls the plugin:                          │
+│     - load each upstream's TaskContext.outputs into                   │
+│       task_ctx.upstream_outputs                                       │
+│     - re-render task_ctx.inputs with the new outputs namespace        │
+│       bound (vars is bound to a sentinel — it was already resolved    │
+│       at site 1)                                                      │
+│     → stored back on TaskContext.inputs, then plugin instantiates    │
+├──────────────────────────────────────────────────────────────────────┤
+│  3. Dryrun render              beacon/dryrun.py                       │
+│     ──────────────                                                    │
+│     Same as site 1 but error-tolerant: failures become                │
+│     ``DryrunResult.warnings`` instead of exceptions.                  │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
-**Key principle**: By the time the executor runs a plugin, `TaskContext.inputs`
-contains **fully resolved concrete values**. The executor and plugin never
-perform Jinja rendering.
+By the time a plugin's `execute()` runs, **`TaskContext.inputs` contains
+fully concrete values**. Plugins do not import `Renderer`.
 
 ---
 
-## Plugin Author Guide
+## Two-Pass Flow End-to-End
 
-### Declaring Template Fields
+```text
+variables.yml (stage = prod)
+─────────────────────────────
+gcs_bucket: my-prod-bucket
+source_system: postgres
 
-If you write a custom plugin with fields that should support `{{ }}` syntax:
+Deployment (metadata store)
+──────────────────────────────
+id: daily-customers
+dag_id: extract-load-table
+variables_ref: prod
+params:
+  source: "{{ vars('source_system') }}"   ← templated at deploy author time
+  bucket: "{{ vars('gcs_bucket') }}"
+
+Trigger (scheduled or manual)
+──────────────────────────────
+Scheduler resolves vars against `prod` stage; the merged
+TaskContext.params becomes:
+  params = {source: "postgres", bucket: "my-prod-bucket"}
+
+DAG action
+──────────
+- id: extract
+  uses: py
+  inputs:
+    py_file: ./scripts/extract.py
+    table: "{{ params.source }}_events"        ← site 1 (trigger-time)
+    date:  "{{ runtime.logical_date }}"        ← site 1
+
+- id: transform
+  uses: py
+  upstream: [extract]
+  inputs:
+    rows: "{{ outputs.extract.row_count }}"    ← site 2 (pre-execute)
+
+What the plugin actually receives
+──────────────────────────────────
+extract.inputs   = {py_file: "./scripts/extract.py",
+                    table:   "postgres_events",
+                    date:    datetime(2026, 6, 4, ...)}
+
+transform.inputs = {rows: 42}      # outputs.extract.row_count
+```
+
+---
+
+## Native Types
+
+Pure-expression templates return their underlying Python value, not a
+stringification. This matters more often than it looks:
+
+```yaml
+threshold:  "{{ 0.95 }}"             # float 0.95
+batch_size: "{{ 100 * 10 }}"         # int 1000
+enabled:    "{{ True }}"             # bool True
+nothing:    "{{ x }}"  with x=None   # None (not "None")
+tags:       "{{ ['a', 'b'] }}"       # list ["a", "b"]
+items:      "{{ params.items }}"     # whatever type `params.items` is
+mixed:      "prefix-{{ x }}"  x=5    # "prefix-5"  (mixed → str, correct)
+```
+
+Plugin authors never need to coerce types — declare a Pydantic field
+with the expected type and the input arrives correctly typed.
+
+---
+
+## Writing a Custom Plugin
+
+Plugins are plain Pydantic `BaseModel`s. The runner pre-renders inputs;
+the plugin just declares the shape it expects.
 
 ```python
-from typing import ClassVar
-from beacon.core import BasePlugin, Context
+from typing import ClassVar, Any
+from beacon import BasePlugin, Context
 
 
 class GcsExtractPlugin(BasePlugin):
     plugin_name: ClassVar[str] = "gcs-extract"
 
-    # These fields will be Jinja-rendered before validation
-    template_fields: ClassVar[tuple[str, ...]] = ("bucket", "prefix")
-
+    # Plain Pydantic fields. ALL of them can be set from templated YAML
+    # — beacon resolves the template before instantiating this model.
     bucket: str
     prefix: str
-    max_files: int = 100  # Not templated — always literal
+    max_files: int = 100
 
-    async def execute(self, context: Context) -> dict:
-        # bucket and prefix are already resolved concrete strings
-        files = await list_gcs_files(self.bucket, self.prefix)
-        return {"file_count": len(files[:self.max_files])}
+    async def execute(self, context: Context) -> dict[str, Any]:
+        # self.bucket / self.prefix / self.max_files are concrete values.
+        from google.cloud import storage
+        client = storage.Client()
+        blobs = list(client.list_blobs(self.bucket, prefix=self.prefix))
+        return {"file_count": min(len(blobs), self.max_files)}
 ```
 
 Usage in YAML:
-```yaml
-actions:
-  - id: extract
-    uses: gcs-extract
-    inputs:
-      bucket: "{{ params.gcs_bucket }}"
-      prefix: "raw/{{ params.date }}/events"
-      max_files: 50
-```
-
-### What Gets Rendered
-
-Only fields listed in `template_fields` are rendered. This is intentional:
-
-- **Security**: Prevents injection via fields that shouldn't be templates
-- **Performance**: Only scans fields that need it
-- **Clarity**: Makes it explicit which fields support dynamic values
-
-### Native Type Rendering
-
-Because Beacon uses Jinja2's `NativeEnvironment`, templates can return
-non-string types:
 
 ```yaml
-inputs:
-  threshold: "{{ 0.95 }}"         # → float 0.95 (not string "0.95")
-  batch_size: "{{ 100 * 10 }}"    # → int 1000
-  enabled: "{{ True }}"           # → bool True
-  tags: "{{ ['a', 'b', 'c'] }}"   # → list ['a', 'b', 'c']
+- id: extract
+  uses: gcs-extract
+  inputs:
+    bucket: "{{ vars('gcs_bucket') }}"
+    prefix: "raw/{{ runtime.logical_date.strftime('%Y-%m-%d') }}/events"
+    max_files: 50
 ```
 
-This eliminates the need for type coercion in plugin code.
+There is no `template_fields` to declare. Everything in `inputs` is
+fair game for templating; what *isn't* a string passes through untouched.
+
+---
+
+## Cheat-sheet
+
+| You want…                                | Write                                       |
+|------------------------------------------|---------------------------------------------|
+| Stage variable                           | `{{ vars('key') }}`                         |
+| Deployment / DAG param                   | `{{ params.key }}`                          |
+| Upstream task output                     | `{{ outputs.task_id.key }}`                 |
+| Logical date                             | `{{ runtime.logical_date }}`                |
+| Run id                                   | `{{ runtime.run_id }}`                      |
+| Math / coerced literal                   | `{{ 1024 * 1024 }}`                         |
+| Inline default                           | `{{ params.maybe or 'fallback' }}`          |
+| Jinja filter                             | `{{ params.name | upper }}`                 |
+| Pass a literal `{` to a plugin           | use a non-string type, or `{{ "{" }}`       |
