@@ -117,7 +117,7 @@ secrets adapter, audit log.
 |---------------------------------------------------------------------------------------------|----------|------------------------------------------------------|
 | Callback system with registry resolution                                                    | ✅        | Callback parity Python/YAML                          |
 | Async worker with retry scheduling                                                          | ✅        | Full lifecycle transitions                           |
-| `MetadataProtocol` + `LocalMetadata` (sharded)                                               | ✅        | Pluggable persistence, 1000+ DAGs                    |
+| `MetadataProtocol` + `LocalMetadata` (sharded)                                              | ✅        | Pluggable persistence, 1000+ DAGs                    |
 | `TaskFailed` / `TaskSkipped` exception support                                              | ✅        | Plugin-driven retry/skip control                     |
 | `Deployment` model (reusable DAG + per-env config)                                          | ✅        | DAG reuse without duplication                        |
 | `Dag.run()` / `Dag.test()` / `Dag.dryrun()` methods                                         | ✅        | Developer workflow (validate → test → run)           |

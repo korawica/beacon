@@ -134,6 +134,7 @@ Deployment ─ binds a Dag to: cron + tz + params + variable_overrides
 
 ```text
 Dag(id="extract-load-table")
+  │
   ├── Deployment(id="daily-customers-from-postgres",
   │              cron="0 2 * * *", params={source: postgres})
   └── Deployment(id="hourly-orders-from-mysql",
@@ -243,8 +244,7 @@ async def execute(self, context: Context) -> dict:
 
 Example `uses: py` flow:
 
-```yaml
-# dag.yml
+```yaml title="dag.yml
 - id: transform
   type: task
   uses: py
@@ -254,8 +254,7 @@ Example `uses: py` flow:
     params: { source: "{{ params.source_system }}" }
 ```
 
-```python
-# scripts/transform.py
+```python title="scripts/transform.py"
 from beacon import load_context
 
 def main(source: str):
@@ -298,12 +297,12 @@ UPSTREAM_FAILED. SKIPPED → downstream SKIPPED.
 
 Waits for an external condition. Plugin runs an async poke loop.
 
-| Field               | Type | Default | Description                                    |
-|---------------------|------|---------|------------------------------------------------|
-| check_interval      | int  | 60      | Seconds between condition checks               |
-| execution_timeout   | int  | None    | Max wait time before failing                   |
-| exponential_backoff | bool | true    | Increase interval between checks               |
-| fail_mode           | str  | soft    | `soft` = FAILED on timeout; `silent` = SKIPPED |
+| Field               | Type | Default | Description                                                   |
+|---------------------|------|---------|---------------------------------------------------------------|
+| check_interval      | int  | 60      | Seconds between condition checks                              |
+| execution_timeout   | int  | None    | Max wait time before failing                                  |
+| exponential_backoff | bool | true    | Increase interval between checks                              |
+| fail_mode           | str  | soft    | `soft` = SKIPPED on timeout; `silent` = SKIPPED on any errors |
 
 ```python
 class GcsSensor(BasePlugin):

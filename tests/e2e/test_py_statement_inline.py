@@ -203,3 +203,161 @@ class TestTemplateExt:
         from beacon.core import BasePlugin
 
         assert BasePlugin.template_ext == ()
+
+
+class TestJinjaAdvancedFeatures:
+    """Test advanced Jinja features (extends, include, for loops)."""
+
+    def test_file_with_for_loop(self, tmp_path):
+        """Jinja for loops work in template files."""
+        assets_dir = tmp_path / "assets"
+        assets_dir.mkdir()
+        script = assets_dir / "script.py"
+        script.write_text("""
+def main():
+    # Simple for loop example
+    parts = []
+{% for name in params.names %}
+    parts.append("{{ name }}")
+{% endfor %}
+    return {"names": parts}
+""")
+
+        dag = Dag(
+            id="for-loop",
+            actions=[
+                Task(
+                    id="for-task",
+                    uses="py",
+                    inputs={
+                        "py_statement": "script.py",
+                        "py_function": "main",
+                    },
+                ),
+            ],
+        )
+        meta = LocalMetadata(tmp_path / "meta")
+        result = asyncio.run(
+            DagRunner(dag, meta=meta, bundle_root=tmp_path).run(
+                params={"names": ["alice", "bob", "charlie"]}
+            )
+        )
+        assert result.state == "success"
+        assert result.outputs["for-task"]["names"] == [
+            "alice",
+            "bob",
+            "charlie",
+        ]
+
+    def test_file_with_extends(self, tmp_path):
+        """Jinja template inheritance with extends works."""
+        assets_dir = tmp_path / "assets"
+        assets_dir.mkdir()
+
+        # Base template
+        base = assets_dir / "base.py"
+        base.write_text("""
+def main():
+    result = {% block content %}base{% endblock %}
+    return {"result": result}
+""")
+
+        # Child template
+        child = assets_dir / "child.py"
+        child.write_text("""{% extends "base.py" %}
+{% block content %}"{{ params.value }}"{% endblock %}
+""")
+
+        dag = Dag(
+            id="extends",
+            actions=[
+                Task(
+                    id="extends-task",
+                    uses="py",
+                    inputs={
+                        "py_statement": "child.py",
+                        "py_function": "main",
+                    },
+                ),
+            ],
+        )
+        meta = LocalMetadata(tmp_path / "meta")
+        result = asyncio.run(
+            DagRunner(dag, meta=meta, bundle_root=tmp_path).run(
+                params={"value": "child-value"}
+            )
+        )
+        assert result.state == "success"
+        assert result.outputs["extends-task"]["result"] == "child-value"
+
+    def test_file_with_include(self, tmp_path):
+        """Jinja include works in template files."""
+        assets_dir = tmp_path / "assets"
+        assets_dir.mkdir()
+
+        # Partial template
+        partial = assets_dir / "partial.py"
+        partial.write_text('partial_value = "{{ params.shared }}"')
+
+        # Main template
+        main = assets_dir / "main.py"
+        main.write_text("""
+{% include "partial.py" %}
+
+def main():
+    return {"value": partial_value}
+""")
+
+        dag = Dag(
+            id="include",
+            actions=[
+                Task(
+                    id="include-task",
+                    uses="py",
+                    inputs={
+                        "py_statement": "main.py",
+                        "py_function": "main",
+                    },
+                ),
+            ],
+        )
+        meta = LocalMetadata(tmp_path / "meta")
+        result = asyncio.run(
+            DagRunner(dag, meta=meta, bundle_root=tmp_path).run(
+                params={"shared": "shared-value"}
+            )
+        )
+        assert result.state == "success"
+        assert result.outputs["include-task"]["value"] == "shared-value"
+
+    def test_file_in_subdirectory(self, tmp_path):
+        """Template files can be in subdirectories."""
+        assets_dir = tmp_path / "assets"
+        scripts_dir = assets_dir / "scripts"
+        scripts_dir.mkdir(parents=True)
+
+        script = scripts_dir / "transform.py"
+        script.write_text("""
+def main():
+    return {"path": "scripts/transform.py"}
+""")
+
+        dag = Dag(
+            id="subdir",
+            actions=[
+                Task(
+                    id="subdir-task",
+                    uses="py",
+                    inputs={
+                        "py_statement": "scripts/transform.py",
+                        "py_function": "main",
+                    },
+                ),
+            ],
+        )
+        meta = LocalMetadata(tmp_path / "meta")
+        result = asyncio.run(
+            DagRunner(dag, meta=meta, bundle_root=tmp_path).run()
+        )
+        assert result.state == "success"
+        assert result.outputs["subdir-task"]["path"] == "scripts/transform.py"

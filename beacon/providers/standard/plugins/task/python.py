@@ -8,10 +8,8 @@ Usage (YAML):
         type: task
         uses: py
         inputs:
-          py_statement: ./my_script.py    # File path (ends with .py)
-          py_function: main               # optional, defaults to "main"
-          params:
-            source_system: "{{ params.source_system }}"
+          py_statement: scripts/transform.py    # Searched in assets/ directories
+          py_function: main                     # optional, defaults to "main"
 
       - id: inline
         type: task
@@ -22,39 +20,42 @@ Usage (YAML):
                 return {"status": "done"}
           py_function: main
 
-The user's function is called with `params` as keyword arguments.
-Inside the function, `load_context()` provides access to logger, run_id, etc.
+Template search path:
+    Files ending in .py are searched in:
+      1. <dag_folder>/assets/  (DAG-local assets, higher priority)
+      2. <bundle_root>/assets/ (bundle-global assets)
 
-User file example:
-    from beacon.runtime import load_context
+    The file path should NOT include "assets/" prefix:
+      ✅ py_statement: scripts/transform.py
+      ❌ py_statement: assets/scripts/transform.py
+      ❌ py_statement: ./scripts/transform.py
 
-    def main(source_system: str):
-        ctx = load_context()
-        ctx.logger.info("Processing %s", source_system)
-        return {"rows_processed": 100}
+Template features:
+    Files are rendered with full Jinja support including:
+      - {{ params.x }}          variable interpolation
+      - {% if condition %}...{% endif %}   conditionals
+      - {% for item in list %}...{% endfor %}  loops
+      - {% extends "base.py" %} template inheritance
+      - {% include "partials/header.py" %}  includes
+      - {% raw %}{{ literal }}{% endraw %}  escape Jinja
 
-Template rendering in files:
-    When py_statement ends with .py, the file contents are rendered with Jinja.
-    Use {{ params.x }} to inject values, or {{{{ params.x }}}} for literal braces.
-
-    # transform.py
-    def main():
-        source = "{{ params.source }}"  # Rendered to actual value
-        return {"source": source}
+    Use {% raw %}...{% endraw %} for literal braces in Python code:
+      # In transform.py
+      def main():
+          template = "{% raw %}{{ params.source }}{% endraw %}"  # Literal braces
+          return {"template": template}
 """
 
 import asyncio
-import importlib.util
 import logging
 import os
 import sys
-from pathlib import Path
 from typing import Any, ClassVar, TYPE_CHECKING
 
 from pydantic import Field
 
 from .....core import BasePlugin
-from .....core.assets import resolve_asset
+from .....core.template import render_template_file, render_template_string
 from .....runtime import (
     RuntimeContext,
     _clear_runtime_context,
@@ -117,28 +118,54 @@ class PythonPlugin(BasePlugin):
 
         Steps:
             1. Determine if py_statement is a file path or inline code
-            2. If file: load, render with Jinja, and prepare for execution
-            3. If inline: render with Jinja and prepare for execution
+            2. If file: render with Jinja FileSystemLoader (supports extends/include)
+            3. If inline: render as Jinja string
             4. Set environment variables
             5. Set runtime context (available via load_context())
             6. Execute the code
             7. Call the target function with params as kwargs
             8. Return the result (if dict) as task outputs
         """
+        # Build template context
+        template_context = {
+            "params": context.get("params", {}),
+            "vars": lambda n: context.get("vars", {}).get(
+                n, f"<unresolved: vars('{n}')>"
+            ),
+            "runtime": context.get("runtime", {}),
+            "outputs": context.get("upstream_outputs", {}),
+        }
+
         # Determine if we have a file path or inline code
-        is_file = self.py_statement.strip().endswith(".py")
+        stripped = self.py_statement.strip()
+        is_file = stripped.endswith(".py")
+        is_absolute = stripped.startswith("/") or (
+            len(stripped) > 1 and stripped[1] == ":"
+        )
 
         if is_file:
-            # File path: resolve via bundle-aware asset lookup
-            py_path = resolve_asset(self.py_statement)
-            code = py_path.read_text()
-        else:
-            # Inline code: use as-is (no file resolution)
-            code = self.py_statement
-            py_path = None
+            if is_absolute:
+                # Absolute path: read file directly and render as string
+                # (for backwards compatibility and special cases)
+                from pathlib import Path
 
-        # Render the code with Jinja (for both file and inline cases)
-        rendered_code = self._render_code(code, context)
+                py_path = Path(stripped)
+                if not py_path.exists():
+                    raise FileNotFoundError(f"File not found: {py_path}")
+                code = py_path.read_text()
+                rendered_code = render_template_string(code, template_context)
+            else:
+                # Relative path: use FileSystemLoader for full Jinja support
+                # Path is searched in assets/ directories (no "assets/" prefix needed)
+                template_name = stripped
+                rendered_code = render_template_file(
+                    template_name, template_context
+                )
+        else:
+            # Inline code: render as string
+            rendered_code = render_template_string(
+                self.py_statement, template_context
+            )
 
         # Set environment variables
         original_env: dict[str, str | None] = {}
@@ -166,13 +193,9 @@ class PythonPlugin(BasePlugin):
         _set_runtime_context(runtime_ctx)
 
         try:
-            # Execute the code and get the module
-            if is_file and py_path:
-                module = self._import_file(py_path, rendered_code)
-                source_name = py_path.name
-            else:
-                module = self._import_code(rendered_code)
-                source_name = "<inline>"
+            # Execute the rendered code
+            module = self._import_code(rendered_code)
+            source_name = self.py_statement if is_file else "<inline>"
 
             # Get the target function
             func = getattr(module, self.py_function, None)
@@ -212,82 +235,6 @@ class PythonPlugin(BasePlugin):
             _clear_runtime_context()
 
     @staticmethod
-    def _render_code(code: str, context: Context) -> str:
-        """Render code string with Jinja.
-
-        Uses the same Renderer as the scheduler but for code contents.
-        Supports both file contents and inline code.
-
-        Args:
-            code: Python code string with optional Jinja templates
-            context: Runtime context with params, vars, outputs, runtime
-
-        Returns:
-            Rendered code string with Jinja templates resolved
-        """
-        from beacon.core.renderer import Renderer
-
-        renderer = Renderer(
-            {
-                "params": context.get("params", {}),
-                "vars": lambda n: context.get("vars", {}).get(
-                    n, f"<unresolved: vars('{n}')>"
-                ),
-                "runtime": context.get("runtime", {}),
-                "outputs": context.get("upstream_outputs", {}),
-            }
-        )
-        return renderer.render(code)
-
-    @staticmethod
-    def _import_file(path: Path, rendered_code: str | None = None):
-        """Import a Python file as a module without polluting sys.modules.
-
-        Args:
-            path: Path to the Python file
-            rendered_code: If provided, use this rendered code instead of
-                reading from file. Useful when code was pre-rendered with Jinja.
-        """
-        module_name = f"_beacon_user_{path.stem}"
-
-        if rendered_code is not None:
-            # Use rendered code directly via exec
-            module = type(sys)(module_name)
-            module.__file__ = str(path)
-            module.__dict__["__name__"] = module_name
-
-            # Add parent dir to sys.path so relative imports work
-            parent = str(path.parent)
-            added_to_path = parent not in sys.path
-            if added_to_path:
-                sys.path.insert(0, parent)
-
-            try:
-                exec(rendered_code, module.__dict__)
-                return module
-            finally:
-                if added_to_path:
-                    sys.path.remove(parent)
-        else:
-            # Original behavior: load from file
-            spec = importlib.util.spec_from_file_location(module_name, path)
-            if spec is None or spec.loader is None:
-                raise ImportError(f"Cannot load module from {path}")
-
-            parent = str(path.parent)
-            added_to_path = parent not in sys.path
-            if added_to_path:
-                sys.path.insert(0, parent)
-
-            try:
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
-                return module
-            finally:
-                if added_to_path:
-                    sys.path.remove(parent)
-
-    @staticmethod
     def _import_code(code: str):
         """Import inline Python code as a module.
 
@@ -314,22 +261,48 @@ class PythonPlugin(BasePlugin):
         if not self.py_teardown:
             return
 
+        # Build template context
+        template_context = {
+            "params": context.get("params", {}),
+            "vars": lambda n: context.get("vars", {}).get(
+                n, f"<unresolved: vars('{n}')>"
+            ),
+            "runtime": context.get("runtime", {}),
+            "outputs": context.get("upstream_outputs", {}),
+        }
+
         # Determine if we have a file path or inline code
-        is_file = self.py_statement.strip().endswith(".py")
+        stripped = self.py_statement.strip()
+        is_file = stripped.endswith(".py")
+        is_absolute = stripped.startswith("/") or (
+            len(stripped) > 1 and stripped[1] == ":"
+        )
 
         if is_file:
             try:
-                py_path = resolve_asset(self.py_statement)
-            except FileNotFoundError as exc:
+                if is_absolute:
+                    # Absolute path: read file directly
+                    from pathlib import Path
+
+                    py_path = Path(stripped)
+                    if not py_path.exists():
+                        raise FileNotFoundError(f"File not found: {py_path}")
+                    code = py_path.read_text()
+                    rendered_code = render_template_string(
+                        code, template_context
+                    )
+                else:
+                    template_name = stripped
+                    rendered_code = render_template_file(
+                        template_name, template_context
+                    )
+            except Exception as exc:
                 logger.warning("Teardown skipped: %s", exc)
                 return
-            code = py_path.read_text()
         else:
-            code = self.py_statement
-            py_path = None
-
-        # Render the code with Jinja
-        rendered_code = self._render_code(code, context)
+            rendered_code = render_template_string(
+                self.py_statement, template_context
+            )
 
         # Re-set runtime context so teardown function can use load_context()
         task_logger = logging.getLogger(
@@ -351,21 +324,18 @@ class PythonPlugin(BasePlugin):
         _set_runtime_context(runtime_ctx)
 
         try:
-            if is_file and py_path:
-                module = self._import_file(py_path, rendered_code)
-            else:
-                module = self._import_code(rendered_code)
+            module = self._import_code(rendered_code)
 
             func = getattr(module, self.py_teardown, None)
             if func is None:
-                source_name = py_path.name if py_path else "<inline>"
+                source_name = self.py_statement if is_file else "<inline>"
                 logger.warning(
                     "Teardown function %r not found in %s",
                     self.py_teardown,
                     source_name,
                 )
                 return
-            source_name = py_path.name if py_path else "<inline>"
+            source_name = self.py_statement if is_file else "<inline>"
             logger.info("Running teardown %s:%s", source_name, self.py_teardown)
             result = func(**self.params)
             if asyncio.iscoroutine(result):
