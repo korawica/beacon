@@ -1,7 +1,7 @@
 """Beacon unified logging pipeline.
 
 One pipeline handles both framework logs (``beacon.worker``,
-``beacon.scheduler``, ``beacon.executor`` ...) and task logs
+``beacon.runner``, ``beacon.executor`` ...) and task logs
 (``ctx.logger.info(...)`` inside plugins / user Python).
 
 Records are tagged with ``dag_id`` / ``run_id`` / ``task_id`` /

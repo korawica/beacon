@@ -28,7 +28,8 @@ Legend: ✅ Done · 🟡 In progress · ⬜ Pending · 🚫 Cut (see non-goals)
 | `TaskFailed` / `TaskSkipped` exception support                  | ✅       | Plugin-driven retry/skip control           |
 | `Deployment` model (reusable DAG + per-env config)              | ✅       | DAG reuse without duplication              |
 | `Dag.run()` / `Dag.test()` / `Dag.dryrun()` methods             | ✅       | Developer workflow (validate → test → run) |
-| LocalScheduler (trigger rules, branch, teardown, DAG callbacks) | ✅       | Full DAG lifecycle in-process              |
+| `DagRunner` (trigger rules, branch, teardown, DAG callbacks; renamed from `LocalScheduler`) | ✅     | Full DAG lifecycle in-process              |
+| `DagRunner.clear()` + `resume=True` + `Dag.clear()` (backfill / fix-and-rerun)              | ✅     | Clear past task, re-execute keeping upstream outputs |
 | Setup & Teardown (`teardown` field + scheduler)                 | ✅       | Cluster/staging lifecycle                  |
 | Lean Jinja renderer (SandboxedEnvironment only)                 | ✅       | Two-pass: trigger-time + execute-time      |
 

@@ -56,7 +56,7 @@ class Dag(BaseModel):
         metadata_path: str | None = None,
         max_concurrent: int = 10,
     ) -> dict[str, Any]:
-        """Run the DAG locally end-to-end via :class:`LocalScheduler`.
+        """Run the DAG locally end-to-end via :class:`DagRunner`.
 
         Validates the DAG via :meth:`dryrun` first, then schedules with
         full lifecycle semantics: trigger rules, branch / short-circuit
@@ -68,7 +68,7 @@ class Dag(BaseModel):
         """
         from ..dryrun import dryrun as _dryrun
         from ..metadata.json_store import JsonMetadata
-        from ..scheduler import LocalScheduler
+        from ..runner import DagRunner
 
         dr = _dryrun(
             self, params=params, variables=variables, logical_date=logical_date
@@ -82,14 +82,14 @@ class Dag(BaseModel):
             metadata_path = tempfile.mkdtemp(prefix="beacon_run_")
 
         meta = JsonMetadata(metadata_path)
-        scheduler = LocalScheduler(
+        scheduler = DagRunner(
             self,
             meta=meta,
             max_concurrent=max_concurrent,
             variables=variables or {},
         )
 
-        run_id = f"run-{uuid.uuid4().hex[:8]}"
+        run_id = f"manual-{self.id}-{uuid.uuid4().hex[:8]}"
         result = asyncio.run(
             scheduler.run(
                 params=params or {},
@@ -103,6 +103,200 @@ class Dag(BaseModel):
             "states": dict(result.states),
             "outputs": dict(result.outputs),
         }
+
+    def clear(
+        self,
+        *,
+        run_id: str,
+        task_id: str | list[str],
+        downstream: bool = False,
+        metadata_path: str,
+        max_concurrent: int = 10,
+    ) -> dict[str, Any]:
+        """Clear one or more tasks in an existing run, then re-execute.
+
+        Backfill / fix-and-rerun convenience. Resets the chosen task(s)
+        to ``NONE`` state (wipes attempts + outputs in metadata) and
+        immediately re-runs the DAG with ``resume=True`` so already-
+        terminal upstream tasks are NOT re-executed.
+
+        For surgical clear-without-rerun, drop down to the runner:
+        ``await DagRunner(dag, meta).clear(run_id=..., task_ids=...)``.
+
+        Args:
+            run_id: The existing DagRun to operate on.
+            task_id: Single id or list of ids to clear.
+            downstream: Also clear every task transitively downstream.
+                Use when the cleared task's outputs feed already-successful
+                downstream tasks.
+            metadata_path: Path to the metadata store (same path used to
+                run the DAG originally — required for state to survive).
+            max_concurrent: Worker concurrency for the rerun.
+
+        Returns:
+            Same shape as :meth:`run`, plus ``"cleared": [task_id, ...]``.
+
+        Example::
+
+            dag.run(metadata_path="./meta", ...)             # initial
+            dag.clear(run_id="run-abc", task_id="task2",
+                      downstream=True, metadata_path="./meta")  # fix + rerun
+        """
+        from ..metadata.json_store import JsonMetadata
+        from ..runner import DagRunner
+
+        meta = JsonMetadata(metadata_path)
+        runner = DagRunner(self, meta=meta, max_concurrent=max_concurrent)
+
+        async def _clear_and_run() -> tuple[list[str], Any]:
+            cleared = await runner.clear(
+                run_id=run_id, task_ids=task_id, downstream=downstream
+            )
+            result = await runner.run(run_id=run_id, resume=True)
+            return cleared, result
+
+        cleared, result = asyncio.run(_clear_and_run())
+        return {
+            "run_id": result.run_id,
+            "state": result.state,
+            "states": dict(result.states),
+            "outputs": dict(result.outputs),
+            "cleared": cleared,
+        }
+
+    def backfill(
+        self,
+        *,
+        start_date: datetime,
+        end_date: datetime,
+        cron: str,
+        metadata_path: str,
+        params: dict[str, Any] | None = None,
+        variables: dict[str, Any] | None = None,
+        reset_existing: bool = False,
+        max_concurrent: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Run the DAG once per cron tick in ``[start_date, end_date]``.
+
+        One DagRun per logical date. ``run_id`` is deterministic from the
+        logical date, so re-invoking backfill over the same range either
+        skips existing runs (default) or clears + re-executes them
+        (``reset_existing=True``).
+
+        Args:
+            start_date: Inclusive lower bound for logical dates.
+            end_date: Inclusive upper bound for logical dates.
+            cron: Cron expression that defines the schedule ticks within
+                the range (e.g. ``"0 0 * * *"`` for daily at midnight).
+            metadata_path: Persistent metadata store path.
+            params: DAG params applied to every generated run.
+            variables: Stage variables applied to every generated run.
+            reset_existing: When a run with the deterministic id already
+                exists for a logical date: ``False`` (default) skips it;
+                ``True`` clears every task in that run and re-executes.
+            max_concurrent: Worker concurrency within each run.
+
+        Returns:
+            One dict per logical date::
+
+                {
+                    "run_id": ...,
+                    "logical_date": datetime,
+                    "state": "success" | "failed" | "skipped",
+                    "states": {task_id: TaskState},
+                    "outputs": {task_id: {...}},
+                }
+
+            ``state == "skipped"`` means the run already existed and
+            ``reset_existing=False``.
+
+        Example::
+
+            dag.backfill(
+                start_date=datetime(2026, 1, 1),
+                end_date=datetime(2026, 1, 7),
+                cron="0 0 * * *",          # daily
+                metadata_path="./meta",
+                params={"source": "postgres"},
+                reset_existing=True,       # re-run any existing days too
+            )
+        """
+        from croniter import croniter
+
+        from ..metadata.json_store import JsonMetadata
+        from ..runner import DagRunner, _build_graph
+
+        if end_date < start_date:
+            raise ValueError(
+                f"end_date {end_date} is before start_date {start_date}"
+            )
+
+        meta = JsonMetadata(metadata_path)
+        runner = DagRunner(
+            self,
+            meta=meta,
+            max_concurrent=max_concurrent,
+            variables=variables or {},
+        )
+        graph = _build_graph(self)
+        all_task_ids = list(graph.task_map)
+
+        # Enumerate cron ticks in [start_date, end_date].
+        from datetime import timedelta
+
+        logical_dates: list[datetime] = []
+        itr = croniter(cron, start_date - timedelta(microseconds=1))
+        while True:
+            nxt: datetime = itr.get_next(datetime)
+            if nxt > end_date:
+                break
+            logical_dates.append(nxt)
+
+        async def _backfill_all() -> list[dict[str, Any]]:
+            out: list[dict[str, Any]] = []
+            for logical_date in logical_dates:
+                run_id = (
+                    f"backfill-{self.id}-"
+                    f"{logical_date.strftime('%Y%m%dT%H%M%S')}"
+                )
+                existing = await meta.get_dag_run(run_id, self.id)
+
+                if existing is not None and not reset_existing:
+                    out.append(
+                        {
+                            "run_id": run_id,
+                            "logical_date": logical_date,
+                            "state": "skipped",
+                            "states": {},
+                            "outputs": {},
+                        }
+                    )
+                    continue
+
+                if existing is not None:
+                    # Reset: clear every task, then resume.
+                    for tid in all_task_ids:
+                        await meta.clear_task(run_id, self.id, tid)
+                    result = await runner.run(run_id=run_id, resume=True)
+                else:
+                    result = await runner.run(
+                        run_id=run_id,
+                        params=params or {},
+                        logical_date=logical_date,
+                    )
+
+                out.append(
+                    {
+                        "run_id": result.run_id,
+                        "logical_date": logical_date,
+                        "state": result.state,
+                        "states": dict(result.states),
+                        "outputs": dict(result.outputs),
+                    }
+                )
+            return out
+
+        return asyncio.run(_backfill_all())
 
     def test(
         self,

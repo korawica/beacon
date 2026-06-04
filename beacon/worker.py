@@ -4,7 +4,7 @@ The worker dequeues task messages, dispatches them to the executor,
 manages state transitions, retries, and per-task callbacks.
 
 For full-DAG orchestration (graph traversal, branch/short-circuit
-propagation, teardown, DAG callbacks) see :mod:`beacon.scheduler`.
+propagation, teardown, DAG callbacks) see :mod:`beacon.runner`.
 
 Usage:
     from beacon.metadata import JsonMetadata
@@ -42,7 +42,7 @@ class _TaskMessage:
     """Optional async callable ``async def(task_ctx, final_state) -> None``.
 
     Invoked exactly once when the task reaches a terminal state. Used by
-    :class:`beacon.scheduler.LocalScheduler` to react to task completion
+    :class:`beacon.runner.DagRunner` to react to task completion
     without polling the metadata store.
     """
 

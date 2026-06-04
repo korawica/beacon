@@ -1,12 +1,12 @@
-"""LocalScheduler.
+"""DagRunner.
 
 In-process async DAG orchestrator. Owns graph traversal, trigger-rule
 evaluation, branch / short-circuit propagation, ``UPSTREAM_FAILED`` /
 ``SKIPPED`` cascading, teardown scheduling, and DAG-level callback firing.
 
-The scheduler delegates per-task execution to :class:`beacon.worker.Worker`
+The runner delegates per-task execution to :class:`beacon.worker.Worker`
 via the ``on_terminal`` hook, so the worker only knows how to run one task
-at a time and the scheduler owns the topology.
+at a time and the runner owns the topology.
 
 Used by :meth:`beacon.models.dag.Dag.run` and :meth:`Dag.test`.
 
@@ -44,7 +44,7 @@ from .worker import Worker
 if TYPE_CHECKING:
     from .models.dag import Dag
 
-logger = logging.getLogger("beacon.scheduler")
+logger = logging.getLogger("beacon.runner")
 
 
 # ---------- helpers --------------------------------------------------------
@@ -132,7 +132,7 @@ def _build_graph(dag: Dag) -> _Graph:
 
 @dataclass
 class DagRunResult:
-    """Outcome of a single :meth:`LocalScheduler.run` invocation."""
+    """Outcome of a single :meth:`DagRunner.run` invocation."""
 
     run_id: str
     dag_id: str
@@ -148,10 +148,10 @@ class DagRunResult:
         return self.state == "success"
 
 
-# ---------- scheduler ------------------------------------------------------
+# ---------- runner ---------------------------------------------------------
 
 
-class LocalScheduler:
+class DagRunner:
     """In-process async DAG runner.
 
     Args:
@@ -191,27 +191,73 @@ class LocalScheduler:
         run_id: str | None = None,
         logical_date: datetime | None = None,
         dag_version: str = "local",
+        resume: bool = False,
     ) -> DagRunResult:
-        """Execute the DAG end-to-end. Returns a :class:`DagRunResult`."""
-        run_id = run_id or f"run-{uuid.uuid4().hex[:8]}"
+        """Execute the DAG end-to-end. Returns a :class:`DagRunResult`.
+
+        Args:
+            params: Run params (ignored when ``resume=True`` — the original
+                DagRun's persisted params are used).
+            run_id: Reuse a run_id to resume. Required if ``resume=True``.
+            logical_date: Initial logical date (ignored on resume).
+            dag_version: Stamp on the DagRun + TaskContexts.
+            resume: Continue an existing run. Tasks already in a terminal
+                state are left alone; tasks in ``NONE`` state (typically
+                because they were cleared via :meth:`clear`) are executed.
+                Use this with :meth:`clear` for backfill / re-run flows.
+        """
+        run_id = run_id or f"manual-{self.dag.id}-{uuid.uuid4().hex[:8]}"
         params = params or {}
         now = logical_date or datetime.now()
         graph = _build_graph(self.dag)
         result = DagRunResult(run_id=run_id, dag_id=self.dag.id)
 
-        await self.meta.create_dag_run(
-            run_id=run_id,
-            dag_id=self.dag.id,
-            dag_version=dag_version,
-            state="running",
-            logical_date=now,
-            params=params,
-        )
+        if resume:
+            existing = await self.meta.get_dag_run(run_id, self.dag.id)
+            if existing is None:
+                raise ValueError(
+                    f"Cannot resume: no DagRun {run_id!r} for "
+                    f"{self.dag.id!r}. Did you forget to clear first?"
+                )
+            # Use the ORIGINAL params/logical_date for determinism.
+            params = existing.get("params", {}) or {}
+            persisted_logical = existing.get("logical_date")
+            if persisted_logical:
+                try:
+                    now = datetime.fromisoformat(str(persisted_logical))
+                except ValueError:
+                    pass  # leave `now` as the caller's argument
+            # Re-open the run so terminal callbacks fire correctly.
+            await self.meta.update_dag_run_state(run_id, self.dag.id, "running")
+            # Seed local_states from metadata so terminal tasks are preserved.
+            persisted_states = await self.meta.get_all_task_states(
+                run_id, self.dag.id
+            )
+            local_states: dict[str, TaskState] = {
+                tid: persisted_states.get(tid, TaskState.NONE)
+                for tid in graph.task_map
+            }
+            # Re-hydrate result.outputs from terminal tasks so downstream
+            # consumers (and the returned DagRunResult) see prior outputs.
+            for tid, state in local_states.items():
+                if state in TERMINAL_STATES:
+                    result.states[tid] = state
+                    outputs = await self.meta.get_task_outputs(
+                        run_id, self.dag.id, tid
+                    )
+                    if outputs:
+                        result.outputs[tid] = outputs
+        else:
+            await self.meta.create_dag_run(
+                run_id=run_id,
+                dag_id=self.dag.id,
+                dag_version=dag_version,
+                state="running",
+                logical_date=now,
+                params=params,
+            )
+            local_states = {tid: TaskState.NONE for tid in graph.task_map}
 
-        # All tasks start NONE in the local view.
-        local_states: dict[str, TaskState] = {
-            tid: TaskState.NONE for tid in graph.task_map
-        }
         # Inputs decided by branch/short-circuit cascade.
         forced_skip: set[str] = set()
 
@@ -572,3 +618,132 @@ class LocalScheduler:
                 await cb.notify(data, event)
             except Exception as exc:  # noqa: BLE001
                 logger.error("DAG callback error on %s: %s", event, exc)
+
+    # --- clear / backfill API -------------------------------------------
+
+    async def clear(
+        self,
+        *,
+        run_id: str,
+        task_ids: str | list[str],
+        downstream: bool = False,
+    ) -> list[str]:
+        """Clear one or more tasks in an existing DagRun so they can re-run.
+
+        Resets each cleared task's state to ``NONE`` and wipes its
+        ``attempts`` + ``outputs`` in the metadata store. Upstream
+        outputs are untouched — when re-executed, the task reads the
+        same upstream values it would on a fresh run.
+
+        Args:
+            run_id: The existing DagRun to operate on.
+            task_ids: Single task id or list of task ids to clear.
+            downstream: When ``True``, also clear every task transitively
+                downstream of each ``task_ids`` entry. Required when the
+                cleared task's outputs feed downstream tasks that have
+                already succeeded — otherwise the downstream would not
+                re-read the new outputs.
+
+        Returns:
+            The full list of task ids that were cleared (request +
+            downstream expansion), in topological order.
+
+        Example::
+
+            runner = DagRunner(dag, meta=meta)
+            await runner.clear(run_id="run-abc", task_ids="task2",
+                               downstream=True)
+            await runner.run(run_id="run-abc", resume=True)
+        """
+        if isinstance(task_ids, str):
+            task_ids = [task_ids]
+
+        graph = _build_graph(self.dag)
+        for tid in task_ids:
+            if tid not in graph.task_map:
+                raise ValueError(
+                    f"Task {tid!r} not found in DAG {self.dag.id!r}"
+                )
+
+        to_clear: list[str] = []
+        seen: set[str] = set()
+        for tid in task_ids:
+            for resolved in _collect_self_and_downstream(
+                graph, tid, include_downstream=downstream
+            ):
+                if resolved not in seen:
+                    seen.add(resolved)
+                    to_clear.append(resolved)
+
+        # Auto-include any teardown whose dependency set was disturbed.
+        # Rationale: a teardown exists to clean up a resource created by
+        # its setup. If we re-run any task that touches the resource,
+        # the cleanup must re-fire too — otherwise the original teardown's
+        # side-effects (e.g. "spark app stopped") are stale, and the
+        # re-execution either fails or leaks the new resource.
+        for teardown_id, deps in graph.teardown_deps.items():
+            if teardown_id in seen:
+                continue
+            if deps & seen:
+                seen.add(teardown_id)
+                to_clear.append(teardown_id)
+
+        for tid in to_clear:
+            await self.meta.clear_task(run_id, self.dag.id, tid)
+        logger.info(
+            "Cleared %d task(s) in run %s/%s: %s",
+            len(to_clear),
+            self.dag.id,
+            run_id,
+            to_clear,
+        )
+        return to_clear
+
+
+def _collect_self_and_downstream(
+    graph: _Graph, root: str, *, include_downstream: bool
+) -> list[str]:
+    """Return ``[root]`` plus, optionally, every transitive downstream."""
+    if not include_downstream:
+        return [root]
+    order: list[str] = [root]
+    seen: set[str] = {root}
+    queue: list[str] = [root]
+    while queue:
+        current = queue.pop(0)
+        for child in graph.downstream.get(current, []):
+            if child in seen:
+                continue
+            seen.add(child)
+            order.append(child)
+            queue.append(child)
+    return order
+
+
+# --- run_id trigger convention ---------------------------------------------
+#
+# By convention, run_id encodes how the run was triggered:
+#
+#   manual-{dag_id}-{uuid}         → Dag.run() / DagRunner.run() invocation
+#   backfill-{dag_id}-{timestamp}  → Dag.backfill()
+#   scheduled-{dag_id}-{timestamp} → Phase 2 DeploymentScheduler (cron)
+#
+# Anything else falls back to "unknown". The convention is enforced by the
+# generators in beacon.models.dag.Dag and DagRunner.run; downstream tools
+# (CLI listings, API filters, the future UI) read it via run_trigger().
+
+_TRIGGER_PREFIXES = ("manual", "backfill", "scheduled")
+
+
+def run_trigger(run_id: str) -> str:
+    """Return the trigger type encoded in a ``run_id``.
+
+    >>> run_trigger("manual-etl-a1b2c3d4")
+    'manual'
+    >>> run_trigger("backfill-etl-20260101T000000")
+    'backfill'
+    >>> run_trigger("legacy-id")
+    'unknown'
+    """
+    head = run_id.split("-", 1)[0]
+    return head if head in _TRIGGER_PREFIXES else "unknown"

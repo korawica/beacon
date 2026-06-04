@@ -161,6 +161,33 @@ class JsonMetadata:
         outputs = data.get("outputs") or {}
         return outputs if isinstance(outputs, dict) else {}
 
+    async def clear_task(self, run_id: str, dag_id: str, task_id: str) -> None:
+        """Reset a task so it will be re-executed on the next run.
+
+        Wipes attempts + outputs in the stored TaskContext and forces
+        state back to ``NONE``. Upstream outputs are untouched, so the
+        re-run reads the same upstreams it would on a fresh run.
+
+        Used by ``DagRunner.clear`` / ``Dag.clear`` for backfill semantics.
+        """
+        ctx = await self.get_task_context(run_id, dag_id, task_id)
+        if ctx is not None:
+            ctx.attempts = []
+            ctx.outputs = {}
+            await self.put_task_context(run_id, dag_id, task_id, ctx)
+        # State file: write NONE (or delete; we choose write for determinism)
+        await _async_write(
+            self._task_state_path(dag_id, run_id, task_id),
+            {
+                "run_id": run_id,
+                "dag_id": dag_id,
+                "task_id": task_id,
+                "state": str(TaskState.NONE),
+                "updated_at": str(datetime.now()),
+            },
+        )
+        self._cache_put(f"{run_id}:{task_id}", TaskState.NONE)
+
     # --- TaskState ---
 
     async def set_task_state(

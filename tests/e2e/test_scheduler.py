@@ -1,4 +1,4 @@
-"""Tests for LocalScheduler — the heart of beacon's local lifecycle."""
+"""Tests for DagRunner — the heart of beacon's local lifecycle."""
 
 import asyncio
 from pathlib import Path
@@ -11,7 +11,7 @@ from beacon import (
     Branch,
     Callback,
     Dag,
-    LocalScheduler,
+    DagRunner,
     OnDagEvent,
     ShortCircuit,
     Task,
@@ -93,7 +93,7 @@ def _reset():
 
 def _run(dag: Dag, tmp_path: Path, **kwargs) -> dict[str, Any]:
     meta = JsonMetadata(tmp_path / "meta")
-    sched = LocalScheduler(dag, meta=meta)
+    sched = DagRunner(dag, meta=meta)
     return asyncio.run(sched.run(**kwargs))
 
 
@@ -475,7 +475,7 @@ def test_dag_run_state_persisted_in_metadata(tmp_path):
         id="persist",
         actions=[Task(id="t", uses="_rec", inputs={"value": "x"})],
     )
-    sched = LocalScheduler(dag, meta=meta)
+    sched = DagRunner(dag, meta=meta)
     result = asyncio.run(sched.run(run_id="run-persist-1"))
 
     async def _check():

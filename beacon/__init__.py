@@ -15,7 +15,7 @@ from .models.branch import Branch
 from .models.short_circuit import ShortCircuit
 from .models.param import Param
 from .runtime import load_context
-from .scheduler import DagRunResult, LocalScheduler
+from .runner import DagRunResult, DagRunner, run_trigger
 from .worker import Worker
 
 __all__ = (
@@ -29,7 +29,7 @@ __all__ = (
     "Deployment",
     "Group",
     "JsonFileHook",
-    "LocalScheduler",
+    "DagRunner",
     "OnDagEvent",
     "OnTaskEvent",
     "PLUGINS_REGISTRY",
@@ -45,5 +45,6 @@ __all__ = (
     "load_context",
     "register_plugin",
     "render_value",
+    "run_trigger",
     "shutdown_logging",
 )

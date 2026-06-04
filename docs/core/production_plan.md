@@ -299,6 +299,8 @@ POST   /runs/{run_id}/cancel                          # cancel running run
 GET    /runs/{run_id}/tasks/{task_id}                 # task detail + attempts
 GET    /runs/{run_id}/tasks/{task_id}/logs?attempt=N  # stream JSONL
 POST   /runs/{run_id}/tasks/{task_id}/clear           # re-queue (clears state)
+                                                      # body: { downstream: bool }
+                                                      # core API: dag.clear() / DagRunner.clear()
 POST   /runs/{run_id}/tasks/{task_id}/mark            # { state: success|skipped|failed }
                                                       # manual ops override
 POST   /sync                  { path: "/path" }       # re-read LocalBundle
