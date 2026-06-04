@@ -261,9 +261,10 @@ class TestTemplateRendering:
         assert result.is_valid
         t = result.resolved_tasks[0]
         # With daily cron "0 2 * * *" and logical_date=2026-06-03 02:00,
-        # data_interval_start = logical_date, data_interval_end = next day 02:00
-        assert "2026-06-03" in t.inputs["start"]
-        assert "2026-06-04" in t.inputs["end"]
+        # data_interval_start = logical_date, data_interval_end = next day 02:00.
+        # Renderer is native-typed: datetime flows through as datetime.
+        assert t.inputs["start"] == datetime(2026, 6, 3, 2, 0, 0)
+        assert t.inputs["end"] == datetime(2026, 6, 4, 2, 0, 0)
 
     def test_renders_data_interval_without_cron(self):
         """Without cron, data_interval_start/end both equal logical_date."""
