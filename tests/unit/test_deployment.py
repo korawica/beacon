@@ -4,7 +4,7 @@ Validates the core "DAG reuse" concept that distinguishes Beacon from Airflow:
 
   - A `Dag` is a reusable template (defines tasks + param schema).
   - A `Deployment` binds a `Dag` to specific runtime config (cron, params,
-    variables_ref, start/end_date) and has its own UI identity.
+    variable_overrides, start/end_date) and has its own UI identity.
   - Multiple Deployments can reference the same `dag_id` with different
     params — each produces independent runs and shows under its own name.
 """
@@ -73,7 +73,7 @@ class TestDeploymentReuse:
                 "target_table": "customers",
                 "columns": ["id", "email", "created_at"],
             },
-            variables_ref="prod",
+            variable_overrides={"stage": "prod"},
         )
 
         deploy_orders = Deployment(
@@ -87,8 +87,12 @@ class TestDeploymentReuse:
                 "target_table": "orders",
                 "columns": ["order_id", "customer_id", "total"],
             },
-            variables_ref="prod",
+            variable_overrides={"stage": "prod"},
         )
+
+        # Both deployments stored overrides → both are pinned.
+        assert deploy_customers.is_pinned
+        assert deploy_orders.is_pinned
 
         # Same DAG reference
         assert deploy_customers.dag_id == deploy_orders.dag_id == dag.id
@@ -190,7 +194,8 @@ class TestDeploymentValidation:
         assert d.cron is None
         assert d.end_date is None
         assert d.params == {}
-        assert d.variables_ref is None
+        assert d.variable_overrides == {}
+        assert d.is_pinned is False
         assert d.owners == []
         assert d.labels == {}
 
@@ -207,7 +212,7 @@ class TestDeploymentSerialization:
             start_date=datetime(2026, 1, 1),
             end_date=datetime(2026, 12, 31),
             params={"source_name": "pg", "target_table": "users"},
-            variables_ref="prod",
+            variable_overrides={"stage": "prod"},
             labels={"team": "data-platform", "tier": "critical"},
             owners=["alice@example.com"],
         )
@@ -220,4 +225,5 @@ class TestDeploymentSerialization:
         assert restored.params == d.params
         assert restored.labels == d.labels
         assert restored.owners == d.owners
-        assert restored.variables_ref == d.variables_ref
+        assert restored.variable_overrides == d.variable_overrides
+        assert restored.is_pinned == d.is_pinned

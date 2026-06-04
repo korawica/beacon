@@ -70,10 +70,34 @@ class Dag(BaseModel):
 
         Returns:
             ``{"run_id": ..., "state": ..., "states": {...}, "outputs": {...}}``.
+
+        Variable resolution:
+            If the DAG was loaded from a bundle (loader populated
+            ``_source_file`` + ``_bundle_root``) and the caller does
+            **not** pass ``variables=``, the bundle's scoped variable
+            chain (dag → group → bundle ``global_variables.yml``) is
+            auto-resolved. Explicit ``variables=`` always wins.
         """
         from ..dryrun import dryrun as _dryrun
         from ..metadata.json_store import JsonMetadata
         from ..runner import DagRunner
+
+        # Auto-resolve scoped variables if available and not overridden.
+        if variables is None and self._source_file and self._bundle_root:
+            from ..core.bundle import LocalBundle
+
+            try:
+                scope = LocalBundle(
+                    name=self._bundle_root.name, path=self._bundle_root
+                ).variable_scope
+                variables = scope.resolve_for(self._source_file)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Scoped variable resolution failed for dag %r: %s",
+                    self.id,
+                    exc,
+                )
+                variables = None
 
         dr = _dryrun(
             self, params=params, variables=variables, logical_date=logical_date

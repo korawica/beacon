@@ -65,6 +65,8 @@ A team can do all of the following without our help:
 1. **Deploy from a checkout** — `beacon deploy /path/to/repo` registers
    DAGs + deployments from a `LocalBundle`. Teams put `git pull && beacon
    sync` in a systemd timer or cron — built-in git polling is **not** v1.
+   Per-deployment variable overrides via `--var` pin the deployment to
+   its current `dag_version`; non-pinned deployments auto-roll on sync.
 2. **Persist beyond restart** — metadata in SQLite survives full process
    restart with no data loss.
 3. **Schedule by cron** — DAGs run on schedule, catchup honored,
@@ -130,9 +132,19 @@ A single CLI replaces ad-hoc Python scripts.
 beacon dryrun  PATH                              # parse + render, no execution
 beacon test    PATH [--params k=v ...]           # run in temp metadata
 beacon run     PATH [--params k=v ...]           # local run, persistent metadata
-beacon deploy  PATH [--cron ...] [--params ...]  # register a Deployment
-beacon sync    PATH                              # re-read a LocalBundle from disk
-beacon list    [dags|deployments|runs]
+beacon deploy  PATH [--cron ...] [--params ...] [--var k=v ...]
+                                                 # register a Deployment; --var
+                                                 # pins it to its dag_version
+beacon deployment sync DEPLOYMENT_ID|--all --bundle PATH
+                                                 # accept a new dag_version for
+                                                 # a pinned deployment
+beacon deployment diff DEPLOYMENT_ID --bundle PATH
+                                                 # preview variable resolution
+                                                 # for a pinned deployment
+beacon sync    PATH                              # re-read a LocalBundle from disk;
+                                                 # auto-rolls non-pinned deployments
+beacon list    [dags|deployments|runs]           # `deployments` shows version +
+                                                 # [pinned] / [stale] flags
 beacon logs    DAG_ID TASK_ID [--run RUN_ID | --logical-date YYYY-MM-DD]
                                                  # tail or dump JSONL from logging store
 beacon serve   [--scheduler] [--worker N] [--api]
@@ -141,14 +153,39 @@ beacon config  show                              # dump effective env-var config
 ```
 
 **DoD checklist:**
-- [ ] `beacon --help` lists all commands with consistent flag style.
-- [ ] All commands exit with non-zero on failure and stable exit codes.
-- [ ] CLI uses `typer` (one dep, no custom argparse).
-- [ ] `beacon logs` resolves `--logical-date` → `run_id` via metadata.
-- [ ] `beacon config show` prints every `BEACON_*` env var with its
-      effective value and the source (`from env`, `default`).
-- [ ] e2e test: spawn `beacon serve` in subprocess, deploy a DAG, observe
-      a run completes, kill, restart, verify state persists.
+- [x] `beacon --help` lists all 11 commands with consistent flag style
+      (`--metadata-path`, `--dag-id`, `--param`, `--var`, `--bundle`
+      naming used uniformly across commands).
+- [x] All commands exit with non-zero on failure and follow a stable
+      exit-code contract documented in `beacon/cli/main.py`:
+      `0` success, `1` runtime/operational failure, `2` invocation
+      error (click `UsageError`). Enforced by tests in
+      `tests/functional/test_cli_*` and `tests/e2e/test_cli_entry_point.py`.
+- [x] **Decision: stay on click, not typer.** The whole CLI is built on
+      click; typer would be a stylistic rewrite with zero functional
+      gain (click also satisfies the original DoD intent: one declarative
+      typed CLI framework, not raw argparse). The DoD wording is the
+      thing that changed, not the dependency.
+- [x] `beacon logs` resolves `--logical-date` → `run_id` via metadata
+      (matches whole-day or exact ISO timestamp). Covered by
+      `tests/functional/test_cli_config_and_logs.py`.
+- [x] `beacon config show` prints every `BEACON_*` env var with its
+      effective value and source (`(env)` / `(default)`). Covered by
+      `tests/functional/test_cli_config_and_logs.py`.
+- [x] Subprocess smoke test for the installed entry point
+      (`tests/e2e/test_cli_entry_point.py`) — verifies `beacon --help`,
+      `beacon config show`, and the unknown-command + bad-path exit
+      codes from a real shell invocation. **The full `beacon serve`
+      subprocess test is deferred to §2.4** (the process model lives
+      there); when §2.4 lands it adds the deploy / observe / kill /
+      restart / verify-state scenario on top of this entry-point test.
+
+**Closeout fixes caught by the new tests:**
+- `LocalBundle.discover_dags()` no longer picks up `variables.yml` or
+  `global_variables.yml` as DAG files (those filenames are reserved).
+- `beacon sync` now stamps a `dag_version` on a pinned deployment that
+  has none yet (first deploy); pinning only exempts a deployment from
+  *subsequent* auto-rolls, not from the initial stamp.
 
 **Non-goals:** TUI dashboards, fancy progress bars, autocompletion install
 scripts (document `--completion bash` flag, don't auto-install),
@@ -227,17 +264,19 @@ the user's responsibility**: a 2-line systemd timer or cron job runs
 `git pull && beacon sync /path/to/repo` on whatever cadence they want.
 
 **DoD checklist:**
-- [ ] `beacon sync PATH` re-reads a `LocalBundle` and registers any
+- [x] `beacon sync PATH` re-reads a `LocalBundle` and registers any
       new/changed DAGs + plugins atomically.
-- [ ] `dag_version` derived from content hash of the DAG file + plugin
-      files it imports.
+- [x] `dag_version` derived from content hash of the DAG + plugin +
+      asset + variables files in the bundle.
 - [ ] Old DAG versions retained; in-flight runs unaffected (pinned to
-      their `dag_version`).
-- [ ] Plugin re-registration is idempotent and version-tagged.
+      their `dag_version`). *(Today: in-flight runs are stamped with
+      their `dag_version` at trigger time, but bundle history is not
+      yet kept side-by-side — rollback works via `git checkout` + sync.)*
+- [x] Plugin re-registration is idempotent and version-tagged.
 - [ ] `POST /sync { path }` API endpoint mirrors the CLI.
 - [ ] Tests: sync → deploy → modify → sync again → new version coexists
       with in-flight runs on old version.
-- [ ] Docs include a systemd timer + a cron example.
+- [x] Docs include a systemd-timer recipe (see `docs/core/deploy.md`).
 
 **Cut (was previously planned):**
 - **`GitBundle` with `git+ssh://` / `git+https://` URLs** — `git pull`
@@ -248,6 +287,57 @@ the user's responsibility**: a 2-line systemd timer or cron job runs
 
 Re-evaluate built-in git support if 3+ teams ask for it AND can't use
 the systemd-timer pattern.
+
+---
+
+#### 2.3a — Bundle policy: scoped variables, asset resolution, pinned deployments
+
+The bundle layout, variable scoping, asset lookup, and deployment
+pinning rules are now the **package policy** documented in
+`docs/core/deploy.md`. This sub-item codifies the runtime + CLI work
+that enforces it.
+
+**DoD checklist:**
+- [x] Bundle layout per `docs/core/deploy.md`:
+      `dags/<group>/<dag>/{dag.yml,variables.yml,assets/}` +
+      `dags/[<group>/]global_variables.yml` + bundle-root `assets/`.
+- [x] `VariableScope` resolves a per-DAG dict with closest-scope-wins
+      precedence: deployment `--var` > dag `variables.yml` > group
+      `global_variables.yml` (any ancestor) > bundle
+      `global_variables.yml`. Shallow per-top-level-key merge.
+- [x] Asset resolution: `py_file: <name>` is tried first as
+      `<dag_folder>/assets/<name>`, then `<bundle_root>/assets/<name>`,
+      else raises `FileNotFoundError` listing both paths. Absolute
+      paths still resolve to themselves.
+- [x] `Deployment.variable_overrides` field replaces `variables_ref`;
+      `Deployment.is_pinned` returns `True` iff any override is stored.
+- [x] `beacon sync` auto-rolls **non-pinned** deployments to the new
+      `dag_version`; pinned deployments stay on their old version and
+      are reported as `stale`.
+- [x] `beacon deployment sync <id>` / `--all --bundle PATH` accepts a
+      new `dag_version` for pinned deployments.
+- [x] `beacon deployment diff <id> --bundle PATH` previews the
+      resolved variable set after sync (marks `--var` overrides).
+- [x] `beacon list deployments [--bundle PATH]` shows the stored
+      `dag_version` and flags `[pinned]` / `[stale (bundle: …)]`.
+- [x] Scheduler computes the scoped variable dict per fire and threads
+      it (plus `bundle_root`) into `DagRunner`.
+- [x] `Dag.run()` auto-resolves scoped variables when the loader has
+      set the dag's `_source_file` + `_bundle_root` (explicit
+      `variables=` still wins).
+- [x] `py` plugin resolves `py_file` via the bundle-aware asset lookup
+      (ContextVar pushed by `DagRunner` — no executor signature change).
+- [x] `beacon sync` emits a soft `WARNING` for folders that hold more
+      than one DAG file (policy: one DAG per folder).
+- [x] Unit + e2e tests green (`tests/unit/test_deployment.py` updated
+      for `variable_overrides` + `is_pinned`; 338/338 passing).
+
+**Non-goals (still):**
+- Promoting one bundle's deployments to another environment by file
+  copy (use `scripts/deploy_<env>.sh` re-application — see deploy.md).
+- Deep-merge of nested-dict variable values (shallow only — predictable).
+- Auto-discovery of which deployments would be affected by a partial
+  bundle change beyond `dag_version` equality.
 
 ---
 

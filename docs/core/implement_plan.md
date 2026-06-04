@@ -20,18 +20,18 @@ Legend: ✅ Done · 🟡 In progress · ⬜ Pending · 🚫 Cut (see non-goals)
 
 ## Phase 1 — Library complete
 
-| Deliverable                                                     | Status  | Validates                                  |
-|-----------------------------------------------------------------|---------|--------------------------------------------|
-| Callback system with registry resolution                        | ✅       | Callback parity Python/YAML                |
-| Async worker with retry scheduling                              | ✅       | Full lifecycle transitions                 |
-| `MetadataProtocol` + `JsonMetadata` (sharded)                   | ✅       | Pluggable persistence, 1000+ DAGs          |
-| `TaskFailed` / `TaskSkipped` exception support                  | ✅       | Plugin-driven retry/skip control           |
-| `Deployment` model (reusable DAG + per-env config)              | ✅       | DAG reuse without duplication              |
-| `Dag.run()` / `Dag.test()` / `Dag.dryrun()` methods             | ✅       | Developer workflow (validate → test → run) |
-| `DagRunner` (trigger rules, branch, teardown, DAG callbacks; renamed from `LocalScheduler`) | ✅     | Full DAG lifecycle in-process              |
-| `DagRunner.clear()` + `resume=True` + `Dag.clear()` (backfill / fix-and-rerun)              | ✅     | Clear past task, re-execute keeping upstream outputs |
-| Setup & Teardown (`teardown` field + scheduler)                 | ✅       | Cluster/staging lifecycle                  |
-| Lean Jinja renderer (SandboxedEnvironment only)                 | ✅       | Two-pass: trigger-time + execute-time      |
+| Deliverable                                                                                 | Status   | Validates                                            |
+|---------------------------------------------------------------------------------------------|----------|------------------------------------------------------|
+| Callback system with registry resolution                                                    | ✅        | Callback parity Python/YAML                          |
+| Async worker with retry scheduling                                                          | ✅        | Full lifecycle transitions                           |
+| `MetadataProtocol` + `JsonMetadata` (sharded)                                               | ✅        | Pluggable persistence, 1000+ DAGs                    |
+| `TaskFailed` / `TaskSkipped` exception support                                              | ✅        | Plugin-driven retry/skip control                     |
+| `Deployment` model (reusable DAG + per-env config)                                          | ✅        | DAG reuse without duplication                        |
+| `Dag.run()` / `Dag.test()` / `Dag.dryrun()` methods                                         | ✅        | Developer workflow (validate → test → run)           |
+| `DagRunner` (trigger rules, branch, teardown, DAG callbacks; renamed from `LocalScheduler`) | ✅        | Full DAG lifecycle in-process                        |
+| `DagRunner.clear()` + `resume=True` + `Dag.clear()` (backfill / fix-and-rerun)              | ✅        | Clear past task, re-execute keeping upstream outputs |
+| Setup & Teardown (`teardown` field + scheduler)                                             | ✅        | Cluster/staging lifecycle                            |
+| Lean Jinja renderer (SandboxedEnvironment only)                                             | ✅        | Two-pass: trigger-time + execute-time                |
 
 ## Phase 1.5 — Close the loop on local-first
 
@@ -40,7 +40,19 @@ See [`production_plan.md` §4 Phase 1.5](./production_plan.md#phase-15--close-th
 | #     | Deliverable                                                                                      | Status  | DoD ref           |
 |-------|--------------------------------------------------------------------------------------------------|---------|-------------------|
 | 1.5.1 | Structured logging pipeline (unified, batched, JSONL, file/memory sinks)                         | ✅       | production §1.5.1 |
-| 1.5.2 | `beacon` CLI (`dryrun`, `test`, `run`, `deploy`, `sync`, `list`, `logs`, `serve`, `config show`) | ⬜       | production §1.5.2 |
+| 1.5.2 | `beacon` CLI (`dryrun`, `test`, `run`, `deploy`, `sync`, `list`, `logs`, `config show`, …)       | ✅       | production §1.5.2 |
+
+**1.5.2 closed with:** all 11 commands shipped (`dryrun`, `test`, `run`,
+`deploy` with `--var`, `deployment {sync,diff}`, `sync` with non-pinned
+auto-roll, `list {dags,deployments,runs}` with `[pinned]`/`[stale]`
+flags, `logs` with `--logical-date` resolution, `trigger`, `scheduler`,
+`config show`), stable exit-code contract documented in
+`beacon/cli/main.py` and enforced by tests, click stays (DoD updated;
+typer migration would be stylistic, no gain). **`beacon serve` is
+explicitly §2.4** — the full deploy/kill/restart/verify subprocess
+scenario lives there; today's subprocess test
+(`tests/e2e/test_cli_entry_point.py`) covers the entry point itself
+and exit codes.
 
 **Cut from Phase 1.5** (nice-to-have, not should-have):
 - `beacon.toml` config file — env vars only in v1.
@@ -51,15 +63,23 @@ See [`production_plan.md` §4 Phase 1.5](./production_plan.md#phase-15--close-th
 See [`production_plan.md` §4 Phase 2](./production_plan.md#phase-2--production-deployment-46-weeks).
 Items are strictly ordered — each unlocks the next.
 
-| #   | Deliverable                                                                       | Status  | DoD ref         |
-|-----|-----------------------------------------------------------------------------------|---------|-----------------|
-| 2.1 | `SqliteMetadata` (default for `beacon serve`, WAL, single writer)                 | ⬜       | production §2.1 |
-| 2.2 | Deployment Scheduler (cron, catchup, timezone, backfill)                          | ⬜       | production §2.2 |
-| 2.3 | `LocalBundle` sync (`beacon sync` CLI + `POST /sync`, content-hash version)       | ⬜       | production §2.3 |
-| 2.4 | `beacon serve` process model (scheduler + worker + api, SIGTERM)                  | ⬜       | production §2.4 |
-| 2.5 | API server — 14 endpoints incl. cancel / mark-state / clear (basic + bearer auth) | ⬜       | production §2.5 |
-| 2.6 | Operational self-healing — stuck-task detector + log rotation + metadata GC       | ⬜       | production §2.6 |
-| 2.7 | Prometheus metrics (8 metrics, bounded cardinality, dashboard)                    | ⬜       | production §2.7 |
+| #    | Deliverable                                                                                  | Status  | DoD ref          |
+|------|----------------------------------------------------------------------------------------------|---------|------------------|
+| 2.1  | `SqliteMetadata` (default for `beacon serve`, WAL, single writer)                            | ⬜       | production §2.1  |
+| 2.2  | Deployment Scheduler (cron, catchup, timezone, backfill)                                     | ⬜       | production §2.2  |
+| 2.3  | `LocalBundle` sync (`beacon sync` CLI + `POST /sync`, content-hash version)                  | 🟡      | production §2.3  |
+| 2.3a | Bundle policy — scoped variables, asset resolution, pinned deployments, `beacon deployment` | ✅       | production §2.3a |
+| 2.4  | `beacon serve` process model (scheduler + worker + api, SIGTERM)                             | ⬜       | production §2.4  |
+| 2.5  | API server — 14 endpoints incl. cancel / mark-state / clear (basic + bearer auth)            | ⬜       | production §2.5  |
+| 2.6  | Operational self-healing — stuck-task detector + log rotation + metadata GC                  | ⬜       | production §2.6  |
+| 2.7  | Prometheus metrics (8 metrics, bounded cardinality, dashboard)                               | ⬜       | production §2.7  |
+
+**2.3 shipped so far:** `beacon sync` validates + auto-rolls
+non-pinned deployments to the new `dag_version`; content-hash version
+already in place; systemd-timer recipe documented in
+`docs/core/deploy.md`. **Still pending for 2.3 closeout:** retain old
+bundle versions side-by-side for in-flight pinning, `POST /sync` API
+endpoint, multi-version-coexistence regression test.
 
 **Cut from Phase 2** (nice-to-have, not should-have):
 - `GitBundle` auto-pull / webhook — replaced by user-owned `git pull && beacon sync` in systemd/cron.

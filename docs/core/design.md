@@ -88,7 +88,7 @@ each with its own:
 - Identity (`Deployment.id` shown in the UI)
 - Schedule (`cron`, `start_date`, `end_date`, `timezone`, `catch_up`)
 - Runtime params (values for `Dag.params`)
-- Stage variables (`variables_ref` → which stage of `variables.yml`)
+- Stage variables (`variable_overrides` → per-deployment overrides layered on top of the bundle's scoped `variables.yml` / `global_variables.yml` chain)
 - Version pin (`dag_version` — None = latest)
 - Owners, labels, enabled flag
 
@@ -591,7 +591,7 @@ Executor (Local / Docker / K8s / Batch)
 │         --dag extract-load-table \                                          │
 │         --cron "0 2 * * *" \                                                │
 │         --params source=postgres target=customers \                         │
-│         --variables-ref prod                                                │
+│         --var alert_path=/var/oncall                                        │
 │                                                                             │
 │  1. Parse DAG from bundle (YAML/Python) — only if not already deployed      │
 │  2. Validate Deployment.dag_id resolves to a known Dag                      │
@@ -602,7 +602,7 @@ Executor (Local / Docker / K8s / Batch)
 │  Metadata written:                                                          │
 │    - DagRecord(id, version, serialized_dag, created_at)                     │
 │    - DeploymentRecord(id, dag_id, dag_version, cron, timezone,              │
-│                       params, variables_ref, start_date, end_date)          │
+│                       params, variable_overrides, start_date, end_date)     │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
                                     │
@@ -615,7 +615,7 @@ Executor (Local / Docker / K8s / Batch)
 │    1. Query DeploymentRecords where enabled=True and next_run <= now        │
 │    2. For each due deployment:                                              │
 │       a. Compute logical_date, data_interval_start, data_interval_end       │
-│       b. Resolve vars() against variables_ref stage → final params          │
+│       b. Resolve vars() against scoped chain → final params                 │
 │       c. Create DagRunRecord(run_id, dag_id, deployment_id, dag_version)    │
 │       d. For each action in DAG: build TaskContext → store in metadata      │
 │       e. TaskContext.attempts = [] (empty, no execution yet)                │
@@ -777,8 +777,9 @@ stages:                     Jinja renders               Context (no
 ```
 
 **Two-pass rendering:**
-1. **Trigger time** — `vars()` expressions resolved against the deployment's
-   `variables_ref` stage → becomes `params`
+1. **Trigger time** — `vars()` expressions resolved against the bundle's
+   scoped variables chain (with deployment `variable_overrides` on top)
+   → becomes `params`
 2. **Pre-execute (in scheduler)** — `params.*` resolved against TaskContext.params
    → becomes `inputs`
 
@@ -799,7 +800,7 @@ Action ─── references a plugin via `uses`, provides `inputs`
 Dag ──── reusable template: actions + dependencies + params schema + callbacks
   │
   v
-Deployment ── binds a Dag to: cron + timezone + params values + variables_ref
+Deployment ── binds a Dag to: cron + timezone + params values + variable_overrides
               many Deployments can reference one Dag
 ```
 

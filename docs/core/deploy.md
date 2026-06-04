@@ -527,23 +527,23 @@ deployments.
 
 ## Cheat-sheet
 
-| Want to…                                  | Do                                            |
-|-------------------------------------------|-----------------------------------------------|
-| Add / change a DAG                        | Edit `dags/<group>/<dag>/dag.yml`, commit, `beacon sync PATH` |
-| Add a dag-local asset                     | Drop file in `dags/<group>/<dag>/assets/`, reference as bare filename in `py_file:` |
+| Want to…                                  | Do                                                                                                 |
+|-------------------------------------------|----------------------------------------------------------------------------------------------------|
+| Add / change a DAG                        | Edit `dags/<group>/<dag>/dag.yml`, commit, `beacon sync PATH`                                      |
+| Add a dag-local asset                     | Drop file in `dags/<group>/<dag>/assets/`, reference as bare filename in `py_file:`                |
 | Add a bundle-global asset                 | Drop file in `assets/`, reference as bare filename in `py_file:` (used when no local file matches) |
-| Change a default variable                 | Edit the closest `variables.yml` / `global_variables.yml`, `beacon sync` |
-| Add / change a plugin                     | Drop `.py` in `plugins/`, `beacon sync PATH`  |
-| Add a Deployment                          | `beacon deploy --id ... --dag-id ...`         |
-| Per-deployment variable override          | `beacon deploy --id ... --var key=value`      |
-| Change a Deployment's cron / params       | `beacon deploy --id <same> ...` again         |
-| Pause a Deployment                        | `beacon deploy --id ... --disabled` *(re-deploy without `--disabled` to re-enable)* |
-| Trigger an ad-hoc run                     | `beacon trigger <deployment-id>`              |
-| Inspect what's deployed                   | `beacon list deployments`                     |
-| See which deployments need promotion      | `beacon list deployments` (look for `stale`)  |
-| Preview variable diff before promoting    | `beacon deployment diff <id>`                 |
-| Accept new `dag_version` for a pinned dep | `beacon deployment sync <id>`                 |
-| Inspect recent runs                       | `beacon list runs --dag-id <id>`              |
-| Tail per-attempt logs                     | `beacon logs DAG_ID TASK_ID --run RUN_ID -f`  |
-| Reload the bundle without restart         | `kill -HUP $(pgrep -f 'beacon scheduler')`    |
-| Rebuild a fresh env from scratch          | Re-apply `scripts/deploy_<env>.sh`            |
+| Change a default variable                 | Edit the closest `variables.yml` / `global_variables.yml`, `beacon sync`                           |
+| Add / change a plugin                     | Drop `.py` in `plugins/`, `beacon sync PATH`                                                       |
+| Add a Deployment                          | `beacon deploy --id ... --dag-id ...`                                                              |
+| Per-deployment variable override          | `beacon deploy --id ... --var key=value`                                                           |
+| Change a Deployment's cron / params       | `beacon deploy --id <same> ...` again                                                              |
+| Pause a Deployment                        | `beacon deploy --id ... --disabled` *(re-deploy without `--disabled` to re-enable)*                |
+| Trigger an ad-hoc run                     | `beacon trigger <deployment-id>`                                                                   |
+| Inspect what's deployed                   | `beacon list deployments`                                                                          |
+| See which deployments need promotion      | `beacon list deployments` (look for `stale`)                                                       |
+| Preview variable diff before promoting    | `beacon deployment diff <id>`                                                                      |
+| Accept new `dag_version` for a pinned dep | `beacon deployment sync <id>`                                                                      |
+| Inspect recent runs                       | `beacon list runs --dag-id <id>`                                                                   |
+| Tail per-attempt logs                     | `beacon logs DAG_ID TASK_ID --run RUN_ID -f`                                                       |
+| Reload the bundle without restart         | `kill -HUP $(pgrep -f 'beacon scheduler')`                                                         |
+| Rebuild a fresh env from scratch          | Re-apply `scripts/deploy_<env>.sh`                                                                 |

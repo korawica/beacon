@@ -56,8 +56,12 @@ def sync(path: str, metadata_path: str | None) -> None:
     failures: list[str] = []
     valid_dag_ids: set[str] = set()
     total = 0
+    # Track folders that contain multiple DAG files for a soft warning.
+    files_per_folder: dict[Path, set[Path]] = {}
     for f in dag_files:
+        produced = 0
         for dag in _load_dags_from_file(f):
+            produced += 1
             total += 1
             result = run_dryrun(dag)
             mark = "✓" if result.is_valid else "✗"
@@ -66,6 +70,18 @@ def sync(path: str, metadata_path: str | None) -> None:
                 valid_dag_ids.add(dag.id)
             else:
                 failures.append(dag.id)
+        if produced:
+            files_per_folder.setdefault(f.parent, set()).add(f)
+
+    # Policy: one DAG per folder (docs/core/deploy.md §7). Warn — don't fail.
+    multi = {d: fs for d, fs in files_per_folder.items() if len(fs) > 1}
+    if multi:
+        click.echo("WARNING: folders with multiple DAG files (policy: one):")
+        for folder, fs in sorted(multi.items()):
+            click.echo(
+                f"  - {folder.relative_to(p)}: "
+                + ", ".join(sorted(f.name for f in fs))
+            )
 
     click.echo(
         f"bundle {bundle.name!r} version={bundle.version} "
@@ -119,7 +135,10 @@ async def _roll_deployments(
         if dep.dag_id not in valid_dag_ids:
             unknown.append(dep.id)
             continue
-        if dep.is_pinned:
+        # Pinned deployments are exempt from *subsequent* auto-rolls only:
+        # a first-time deployment (no dag_version yet) still gets stamped
+        # by this sync so it has a known starting point.
+        if dep.is_pinned and dep.dag_version is not None:
             if dep.dag_version != new_version:
                 pinned_stale.append(dep.id)
             continue

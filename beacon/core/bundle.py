@@ -135,12 +135,21 @@ class LocalBundle:
         return registered
 
     def discover_dags(self) -> list[Path]:
-        """Find all DAG definition files in the dags directory."""
+        """Find all DAG definition files in the dags directory.
+
+        Reserved filenames are skipped: ``global_variables.yml`` (any
+        scope) and ``variables.yml`` (dag scope) carry default
+        variable values, not DAG definitions.
+        """
+        from .variables import DAG_VARIABLES_FILE, GLOBAL_VARIABLES_FILE
+
+        reserved = {DAG_VARIABLES_FILE, GLOBAL_VARIABLES_FILE}
         dags: list[Path] = []
         for pattern in ("**/*.yml", "**/*.yaml", "**/*.py"):
             for f in sorted(self.dags_path.glob(pattern)):
-                if not f.name.startswith("_"):
-                    dags.append(f)
+                if f.name.startswith("_") or f.name in reserved:
+                    continue
+                dags.append(f)
         return dags
 
     def _compute_version(self) -> str:

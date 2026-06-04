@@ -397,7 +397,7 @@ Action ─── references a plugin via `uses`, provides `inputs`
 Dag ────── reusable template: actions + dependencies + params + callbacks
   │
   v
-Deployment ── binds a Dag to: cron + timezone + params + variables_ref
+Deployment ── binds a Dag to: cron + timezone + params + variable_overrides
               many Deployments → one Dag
 ```
 

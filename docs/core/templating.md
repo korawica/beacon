@@ -146,24 +146,26 @@ fully concrete values**. Plugins do not import `Renderer`.
 ## Two-Pass Flow End-to-End
 
 ```text
-variables.yml (stage = prod)
-─────────────────────────────
-gcs_bucket: my-prod-bucket
-source_system: postgres
+variables files (scoped under dags/)
+─────────────────────────────────────
+dags/global_variables.yml:           gcs_bucket: my-prod-bucket
+dags/extract_load/variables.yml:     source_system: postgres
 
 Deployment (metadata store)
 ──────────────────────────────
 id: daily-customers
 dag_id: extract-load-table
-variables_ref: prod
+variable_overrides:                  # optional; pinning happens here
+  alert_path: /var/oncall
 params:
   source: "{{ vars('source_system') }}"   ← templated at deploy author time
   bucket: "{{ vars('gcs_bucket') }}"
 
 Trigger (scheduled or manual)
 ──────────────────────────────
-Scheduler resolves vars against `prod` stage; the merged
-TaskContext.params becomes:
+Scheduler resolves vars against the scoped chain (deployment overrides
+→ dag variables.yml → group global_variables.yml → bundle
+global_variables.yml). The merged TaskContext.params becomes:
   params = {source: "postgres", bucket: "my-prod-bucket"}
 
 DAG action

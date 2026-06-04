@@ -1,4 +1,18 @@
-"""Root Click group for the ``beacon`` CLI."""
+"""Root Click group for the ``beacon`` CLI.
+
+Exit code contract (stable across releases):
+
+* ``0`` — success.
+* ``1`` — runtime / operational failure (DAG dryrun failed, no logs
+  found, deployment not found, etc.). Caller should inspect ``stderr``.
+* ``2`` — invocation error (bad flags, missing required input,
+  malformed cron, unknown subcommand). This is the standard Click
+  ``UsageError`` exit code; downstream automation can treat it as
+  "fix your command line and retry".
+
+Every command must respect this contract: never ``sys.exit(0)`` on
+failure, never use exit codes ≥ 3.
+"""
 
 import click
 

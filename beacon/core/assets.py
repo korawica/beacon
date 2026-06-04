@@ -70,6 +70,8 @@ def resolve_asset(
     """
     raw = Path(path)
     if raw.is_absolute():
+        if not raw.exists():
+            raise FileNotFoundError(f"Asset not found: {raw}")
         return raw
 
     ctx = bundle_ctx if bundle_ctx is not None else get_bundle_context()
