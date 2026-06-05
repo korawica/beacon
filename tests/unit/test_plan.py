@@ -1,7 +1,9 @@
-"""Test dry-run validation."""
+"""Tests for beacon.plan — DAG plan-time validation and template rendering."""
+
+from datetime import datetime
 
 from beacon import Dag, Task, Param
-from beacon.dryrun import dryrun
+from beacon.plan import plan, PlanResult, PlannedTask
 from beacon.models.branch import Branch
 
 # Ensure plugins registered
@@ -19,7 +21,7 @@ class TestPluginExistence:
                 Task(id="t1", uses="py"),
             ],
         )
-        result = dryrun(dag)
+        result = plan(dag)
         assert result.is_valid
 
     def test_missing_plugin(self):
@@ -30,7 +32,7 @@ class TestPluginExistence:
                 Task(id="t1", uses="nonexistent-plugin"),
             ],
         )
-        result = dryrun(dag)
+        result = plan(dag)
         assert not result.is_valid
         assert result.errors[0].category == "plugin"
         assert "not found" in result.errors[0].message
@@ -50,11 +52,11 @@ class TestPluginActionCompatibility:
                 Task(id="t2", uses="empty", upstream=["b1"]),
             ],
         )
-        result = dryrun(dag)
+        result = plan(dag)
         assert result.is_valid
 
     def test_branch_plugin_with_task_action(self):
-        """by_hours plugin used with task action → valid (no compatible_actions restriction)."""
+        """Any plugin can be used with any action type — no compatibility errors."""
         dag = Dag(
             id="test",
             owners=["de"],
@@ -62,8 +64,7 @@ class TestPluginActionCompatibility:
                 Task(id="t1", uses="by_hours"),
             ],
         )
-        result = dryrun(dag)
-        # Any plugin can be used with any action type — no compatibility errors.
+        result = plan(dag)
         assert result.is_valid
 
     def test_generic_plugin_with_any_action(self):
@@ -75,7 +76,7 @@ class TestPluginActionCompatibility:
                 Task(id="t1", uses="py"),
             ],
         )
-        result = dryrun(dag)
+        result = plan(dag)
         assert result.is_valid
 
 
@@ -88,13 +89,12 @@ class TestGraphValidation:
                 Task(id="t1", uses="empty", upstream=["nonexistent"]),
             ],
         )
-        result = dryrun(dag)
+        result = plan(dag)
         assert not result.is_valid
         assert result.errors[0].category == "graph"
         assert "does not exist" in result.errors[0].message
 
     def test_teardown_references_nonexistent_task(self):
-        """Teardown referencing a task_id that doesn't exist in DAG → error."""
         dag = Dag(
             id="test",
             owners=["de"],
@@ -105,7 +105,7 @@ class TestGraphValidation:
                 ),
             ],
         )
-        result = dryrun(dag)
+        result = plan(dag)
         assert not result.is_valid
         assert any(
             e.category == "graph" and "nonexistent" in e.message
@@ -113,7 +113,6 @@ class TestGraphValidation:
         )
 
     def test_teardown_self_reference(self):
-        """A task cannot be a teardown for itself."""
         dag = Dag(
             id="test",
             owners=["de"],
@@ -121,7 +120,7 @@ class TestGraphValidation:
                 Task(id="task1", uses="empty", teardown="task1"),
             ],
         )
-        result = dryrun(dag)
+        result = plan(dag)
         assert not result.is_valid
         assert any(
             "cannot be a teardown for itself" in e.message
@@ -129,7 +128,6 @@ class TestGraphValidation:
         )
 
     def test_valid_teardown_reference(self):
-        """Teardown referencing an existing task_id → valid."""
         dag = Dag(
             id="test",
             owners=["de"],
@@ -143,7 +141,7 @@ class TestGraphValidation:
                 ),
             ],
         )
-        result = dryrun(dag)
+        result = plan(dag)
         assert result.is_valid
 
     def test_valid_graph(self):
@@ -156,7 +154,7 @@ class TestGraphValidation:
                 Task(id="end", uses="empty", upstream=["process"]),
             ],
         )
-        result = dryrun(dag)
+        result = plan(dag)
         assert result.is_valid
         assert result.task_order == ["start", "process", "end"]
 
@@ -170,7 +168,7 @@ class TestGraphValidation:
                 Task(id="c", uses="empty", upstream=["b"]),
             ],
         )
-        result = dryrun(dag)
+        result = plan(dag)
         assert not result.is_valid
         assert any(
             e.category == "graph" and "Cycle" in e.message
@@ -194,9 +192,9 @@ class TestTemplateRendering:
                 ),
             ],
         )
-        result = dryrun(dag, params={"source": "orders"})
+        result = plan(dag, params={"source": "orders"})
         assert result.is_valid
-        t = result.resolved_tasks[0]
+        t = result.planned_tasks[0]
         assert t.inputs["py_statement"] == "./script.py"
 
     def test_renders_jinja_params(self):
@@ -214,9 +212,9 @@ class TestTemplateRendering:
                 ),
             ],
         )
-        result = dryrun(dag, params={"source": "orders"})
+        result = plan(dag, params={"source": "orders"})
         assert result.is_valid
-        assert result.resolved_tasks[0].inputs["value"] == "orders"
+        assert result.planned_tasks[0].inputs["value"] == "orders"
 
     def test_renders_variables(self):
         dag = Dag(
@@ -232,13 +230,12 @@ class TestTemplateRendering:
                 ),
             ],
         )
-        result = dryrun(dag, variables={"bucket": "prod-bucket"})
+        result = plan(dag, variables={"bucket": "prod-bucket"})
         assert result.is_valid
-        assert result.resolved_tasks[0].inputs["bucket"] == "prod-bucket"
+        assert result.planned_tasks[0].inputs["bucket"] == "prod-bucket"
 
     def test_renders_data_interval_from_cron(self):
-        """When cron is provided, data_interval_start/end are computed and
-        available in runtime context for template rendering."""
+        """cron computes data_interval_start/end from logical_date."""
         dag = Dag(
             id="test",
             owners=["de"],
@@ -253,20 +250,15 @@ class TestTemplateRendering:
                 ),
             ],
         )
-        from datetime import datetime
-
         logical = datetime(2026, 6, 3, 2, 0, 0)
-        result = dryrun(dag, logical_date=logical, cron="0 2 * * *")
+        result = plan(dag, logical_date=logical, cron="0 2 * * *")
         assert result.is_valid
-        t = result.resolved_tasks[0]
-        # With daily cron "0 2 * * *" and logical_date=2026-06-03 02:00,
-        # data_interval_start = logical_date, data_interval_end = next day 02:00.
-        # Renderer is native-typed: datetime flows through as datetime.
+        t = result.planned_tasks[0]
         assert t.inputs["start"] == datetime(2026, 6, 3, 2, 0, 0)
         assert t.inputs["end"] == datetime(2026, 6, 4, 2, 0, 0)
 
     def test_renders_data_interval_without_cron(self):
-        """Without cron, data_interval_start/end both equal logical_date."""
+        """Without cron or explicit intervals, both default to logical_date."""
         dag = Dag(
             id="test",
             owners=["de"],
@@ -281,18 +273,46 @@ class TestTemplateRendering:
                 ),
             ],
         )
-        from datetime import datetime
-
         logical = datetime(2026, 6, 3, 2, 0, 0)
-        result = dryrun(dag, logical_date=logical)
+        result = plan(dag, logical_date=logical)
         assert result.is_valid
-        t = result.resolved_tasks[0]
-        # Both should be the same date when no cron
+        t = result.planned_tasks[0]
         assert t.inputs["start"] == t.inputs["end"]
 
+    def test_explicit_data_interval_overrides_cron(self):
+        """Explicit data_interval_start/end take priority over cron."""
+        dag = Dag(
+            id="test",
+            owners=["de"],
+            actions=[
+                Task(
+                    id="t1",
+                    uses="empty",
+                    inputs={
+                        "start": "{{ runtime.data_interval_start }}",
+                        "end": "{{ runtime.data_interval_end }}",
+                    },
+                ),
+            ],
+        )
+        logical = datetime(2026, 6, 3, 2, 0, 0)
+        explicit_start = datetime(2026, 6, 1, 0, 0, 0)
+        explicit_end = datetime(2026, 6, 7, 0, 0, 0)
+        result = plan(
+            dag,
+            logical_date=logical,
+            cron="0 2 * * *",  # should be ignored when explicit args given
+            data_interval_start=explicit_start,
+            data_interval_end=explicit_end,
+        )
+        assert result.is_valid
+        t = result.planned_tasks[0]
+        assert t.inputs["start"] == explicit_start
+        assert t.inputs["end"] == explicit_end
 
-class TestDryRunOutput:
-    def test_print_format(self):
+
+class TestPlanOutput:
+    def test_str_format(self):
         dag = Dag(
             id="etl-pipeline",
             owners=["de"],
@@ -308,8 +328,28 @@ class TestDryRunOutput:
                 ),
             ],
         )
-        result = dryrun(dag)
-        output = result.print()
+        result = plan(dag)
+        output = str(result)
         assert "etl-pipeline" in output
         assert "start → process" in output
         assert "PASS" in output
+
+    def test_result_types(self):
+        """PlanResult, PlanIssue, PlannedTask are the canonical names."""
+        dag = Dag(
+            id="test", owners=["de"], actions=[Task(id="t1", uses="empty")]
+        )
+        result = plan(dag)
+        assert isinstance(result, PlanResult)
+        assert isinstance(result.planned_tasks[0], PlannedTask)
+
+    def test_backward_compat_import(self):
+        """Old beacon.dryrun.dryrun path still works."""
+        from beacon.dryrun import dryrun, DryRunResult
+
+        dag = Dag(
+            id="test", owners=["de"], actions=[Task(id="t1", uses="empty")]
+        )
+        result = dryrun(dag)
+        assert isinstance(result, DryRunResult)
+        assert result.is_valid

@@ -1,41 +1,29 @@
-"""``beacon dryrun PATH`` — parse + render every DAG. No execution."""
-
-import sys
+"""``beacon dryrun`` — deprecated alias for ``beacon plan``."""
 
 import click
 
-from ..loader import load_dags
+from .plan_cmd import plan
 
 
-@click.command()
-@click.argument("path", type=click.Path(exists=True, dir_okay=True))
-@click.option(
-    "--dag-id",
-    default=None,
-    help="Restrict dryrun to a single DAG id.",
+@click.command(
+    name="dryrun",
+    hidden=True,
+    deprecated=True,
+    epilog="Use ``beacon plan`` instead.",
 )
-def dryrun(path: str, dag_id: str | None) -> None:
-    """Validate and render DAG(s) at PATH without executing any task."""
-    dags = load_dags(path)
-    if dag_id is not None:
-        dags = [d for d in dags if d.id == dag_id]
-        if not dags:
-            click.echo(f"DAG {dag_id!r} not found at {path}", err=True)
-            sys.exit(1)
-    if not dags:
-        click.echo(f"No DAGs found at {path}", err=True)
-        sys.exit(1)
-
-    from ...dryrun import dryrun as run_dryrun
-
-    failures = 0
-    for dag in dags:
-        click.echo(f"=== {dag.id} ===")
-        result = run_dryrun(dag)
-        click.echo(result.print())
-        if not result.is_valid:
-            failures += 1
-
-    if failures:
-        click.echo(f"{failures} DAG(s) failed validation", err=True)
-        sys.exit(1)
+@click.argument("path", type=click.Path(exists=True, dir_okay=True))
+@click.option("--dag-id", default=None)
+@click.option("--logical-date", default=None)
+@click.option("--cron", default=None)
+@click.pass_context
+def dryrun(
+    ctx: click.Context,
+    path: str,
+    dag_id: str | None,
+    logical_date: str | None,
+    cron: str | None,
+) -> None:
+    """Deprecated — use ``beacon plan`` instead."""
+    ctx.invoke(
+        plan, path=path, dag_id=dag_id, logical_date=logical_date, cron=cron
+    )

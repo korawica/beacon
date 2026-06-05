@@ -3,7 +3,7 @@
 Exit code contract (stable across releases):
 
 * ``0`` — success.
-* ``1`` — runtime / operational failure (DAG dryrun failed, no logs
+* ``1`` — runtime / operational failure (DAG plan failed, no logs
   found, deployment not found, etc.). Caller should inspect ``stderr``.
 * ``2`` — invocation error (bad flags, missing required input,
   malformed cron, unknown subcommand). This is the standard Click
@@ -23,6 +23,7 @@ from .commands import (
     dryrun_cmd,
     list_cmd,
     logs_cmd,
+    plan_cmd,
     run_cmd,
     scheduler_cmd,
     sync_cmd,
@@ -37,7 +38,8 @@ def cli() -> None:
     """Beacon — an everyday workflow orchestrator."""
 
 
-cli.add_command(dryrun_cmd.dryrun)
+cli.add_command(plan_cmd.plan)
+cli.add_command(dryrun_cmd.dryrun)  # hidden deprecated alias
 cli.add_command(test_cmd.test)
 cli.add_command(run_cmd.run)
 cli.add_command(deploy_cmd.deploy)

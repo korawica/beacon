@@ -4,7 +4,7 @@ Sync is the boundary between bundle (on disk) and Deployments (in
 metadata). It:
 
   * loads custom plugins from ``{PATH}/plugins/``
-  * imports + dry-runs every DAG in the bundle
+  * imports + plans (validates) every DAG in the bundle
   * computes the new ``dag_version`` and rolls **non-pinned** deployments
     forward (pinned deployments — those with stored ``--var`` overrides
     — are left on their old ``dag_version`` and reported as ``stale``)
@@ -20,7 +20,7 @@ from pathlib import Path
 import click
 
 from ...core.bundle import LocalBundle
-from ...dryrun import dryrun as run_dryrun
+from ...plan import plan as run_plan
 from ...metadata import LocalMetadata
 from ...models.deployment import Deployment
 from ..loader import _load_dags_from_file
@@ -63,7 +63,7 @@ def sync(path: str, metadata_path: str | None) -> None:
         for dag in _load_dags_from_file(f):
             produced += 1
             total += 1
-            result = run_dryrun(dag)
+            result = run_plan(dag)
             mark = "✓" if result.is_valid else "✗"
             click.echo(f"  {mark} {dag.id}  ({f.name})")
             if result.is_valid:

@@ -63,7 +63,7 @@ class Dag(BaseModel):
     ) -> dict[str, Any]:
         """Run the DAG locally end-to-end via :class:`DagRunner`.
 
-        Validates the DAG via :meth:`dryrun` first, then schedules with
+        Validates the DAG via :meth:`plan` first, then schedules with
         full lifecycle semantics: trigger rules, branch / short-circuit
         propagation, ``UPSTREAM_FAILED`` cascade, teardown, and
         DAG-level callbacks.
@@ -78,7 +78,7 @@ class Dag(BaseModel):
             chain (dag → group → bundle ``global_variables.yml``) is
             auto-resolved. Explicit ``variables=`` always wins.
         """
-        from ..dryrun import dryrun as _dryrun
+        from ..plan import plan as _plan
         from ..metadata.json_store import LocalMetadata
         from ..runner import DagRunner
 
@@ -99,7 +99,7 @@ class Dag(BaseModel):
                 )
                 variables = None
 
-        dr = _dryrun(
+        dr = _plan(
             self, params=params, variables=variables, logical_date=logical_date
         )
         if not dr.is_valid:
@@ -449,6 +449,33 @@ class Dag(BaseModel):
             }
         return results
 
+    def plan(
+        self,
+        *,
+        params: dict[str, Any] | None = None,
+        variables: dict[str, Any] | None = None,
+        logical_date: datetime | None = None,
+        data_interval_start: datetime | None = None,
+        data_interval_end: datetime | None = None,
+        cron: str | None = None,
+    ):
+        """Validate and render the DAG without executing any plugins.
+
+        Shows resolved inputs per task against real params / variables /
+        logical_date before a single task runs.
+        """
+        from ..plan import plan as _plan
+
+        return _plan(
+            self,
+            params=params,
+            variables=variables,
+            logical_date=logical_date,
+            data_interval_start=data_interval_start,
+            data_interval_end=data_interval_end,
+            cron=cron,
+        )
+
     def dryrun(
         self,
         *,
@@ -457,11 +484,8 @@ class Dag(BaseModel):
         logical_date: datetime | None = None,
         cron: str | None = None,
     ):
-        """Validate and render the DAG without executing any plugins."""
-        from ..dryrun import dryrun as _dryrun
-
-        return _dryrun(
-            self,
+        """Deprecated — use ``dag.plan()`` instead."""
+        return self.plan(
             params=params,
             variables=variables,
             logical_date=logical_date,

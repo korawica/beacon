@@ -36,7 +36,7 @@ def build_runtime_dict(
     This helper ensures consistent runtime dict structure across:
     - runner.py (first-pass render)
     - worker.py (second-pass render)
-    - dryrun.py (validation)
+    - plan.py (validation)
     - python.py (Jinja templates)
 
     Args:

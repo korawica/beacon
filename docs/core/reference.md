@@ -48,7 +48,7 @@ complexity.
 ┌─────────────────────────────────────────────────────────┐
 │                    USER API (Dag)                       │
 ├─────────────────────────────────────────────────────────┤
-│  dag.dryrun()     validate templates + graph            │
+│  dag.plan()       validate templates + graph            │
 │  dag.run()        one-shot execution                    │
 │  dag.test()       tempdir one-shot + pass/fail          │
 │  dag.clear()      fix bug → rerun task(s)               │
@@ -154,7 +154,7 @@ A `Deployment` carries:
 
 | Method                           | Purpose                              | When to use               |
 |----------------------------------|--------------------------------------|---------------------------|
-| `dag.dryrun()`                   | Validate graph + templates           | Before deploy / in CI     |
+| `dag.plan()`                    | Validate graph + templates           | Before deploy / in CI     |
 | `dag.run()`                      | Execute once, persist state          | Manual trigger            |
 | `dag.test()`                     | Execute in tempdir, report pass/fail | Development               |
 | `dag.clear(task_id=...)`         | Reset task + downstream → rerun      | Fix bug, rerun            |
@@ -746,7 +746,7 @@ declares it as its teardown target.
 2. Teardown auto-receives setup `outputs` in `upstream_outputs`.
 3. Teardown failure is non-fatal — logged as warning. DagRun state
    reflects main task outcomes, not teardown failures.
-4. Validated at `dryrun()` — referenced task must exist; no self-ref.
+4. Validated at `plan()` — referenced task must exist; no self-ref.
 5. Multiple independent setup/teardown pairs supported in one DAG.
 
 ### Teardown guarantees
@@ -810,7 +810,7 @@ Properties:
   `SecurityError` via `jinja2.sandbox.SandboxedEnvironment`.
 - **Strict undefined.** `{{ missing }}` raises `UndefinedError` — typos
   fail loudly. (Exception: `vars('foo')` returns sentinel
-  `<unresolved: vars('foo')>` to allow dryrun with partial stage data.)
+  `<unresolved: vars('foo')>` to allow plan with partial stage data.)
 - **Cached.** Module-level template cache (size 400).
 
 ### Namespaces
@@ -851,7 +851,7 @@ Properties:
 │    - re-render task_ctx.inputs with `outputs` namespace bound        │
 │      (vars is already resolved from site 1)                          │
 │    → stored back on TaskContext.inputs, plugin instantiates          │
-├─ 3. Dryrun render ─────── beacon/dryrun.py                           │
+├─ 3. Plan render ───────── beacon/plan.py                            │
 │    Same as site 1 but failures become `DryrunResult.warnings`.       │
 └──────────────────────────────────────────────────────────────────────┘
 ```
@@ -1068,7 +1068,7 @@ Constraints:
 ┌─ Deploy ────────────────────────────────────────────────────────────┐
 │  beacon deploy ... or beacon sync /path                              │
 │  1. Parse DAG from bundle (YAML/Python)                              │
-│  2. Validate (plugins exist, no cycles)                              │
+│  2. Validate (``beacon plan`` — plugins exist, no cycles)            │
 │  3. Serialize Dag + Deployment → Metadata                            │
 │  4. Tag Dag with bundle version (content hash / commit SHA)          │
 └─────────────────────────┬───────────────────────────────────────────┘

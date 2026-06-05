@@ -46,34 +46,45 @@ def runner() -> CliRunner:
 def test_help_lists_commands(runner: CliRunner) -> None:
     res = runner.invoke(cli, ["--help"])
     assert res.exit_code == 0
-    for name in ("dryrun", "test", "run", "config"):
+    for name in ("plan", "test", "run", "config"):
         assert name in res.output
 
 
-# ---------- dryrun --------------------------------------------------------
+# ---------- plan ----------------------------------------------------------
 
 
-def test_dryrun_success(runner: CliRunner, tmp_path: Path) -> None:
+def test_plan_success(runner: CliRunner, tmp_path: Path) -> None:
     f = _write(tmp_path / "d.py", DAG_OK)
-    res = runner.invoke(cli, ["dryrun", str(f)])
+    res = runner.invoke(cli, ["plan", str(f)])
     assert res.exit_code == 0
     assert "hello" in res.output
     assert "PASS" in res.output
 
 
-def test_dryrun_invalid_dag_exits_nonzero(
+def test_plan_invalid_dag_exits_nonzero(
     runner: CliRunner, tmp_path: Path
 ) -> None:
     f = _write(tmp_path / "d.py", DAG_BAD)
-    res = runner.invoke(cli, ["dryrun", str(f)])
+    res = runner.invoke(cli, ["plan", str(f)])
     assert res.exit_code != 0
 
 
-def test_dryrun_missing_dag_id(runner: CliRunner, tmp_path: Path) -> None:
+def test_plan_missing_dag_id(runner: CliRunner, tmp_path: Path) -> None:
     f = _write(tmp_path / "d.py", DAG_OK)
-    res = runner.invoke(cli, ["dryrun", str(f), "--dag-id", "ghost"])
+    res = runner.invoke(cli, ["plan", str(f), "--dag-id", "ghost"])
     assert res.exit_code != 0
     assert "ghost" in res.output
+
+
+# ---------- dryrun (backward-compat alias) --------------------------------
+
+
+def test_dryrun_alias_still_works(runner: CliRunner, tmp_path: Path) -> None:
+    """``beacon dryrun`` is a deprecated alias; it must still succeed."""
+    f = _write(tmp_path / "d.py", DAG_OK)
+    res = runner.invoke(cli, ["dryrun", str(f)])
+    assert res.exit_code == 0
+    assert "PASS" in res.output
 
 
 # ---------- test ----------------------------------------------------------
