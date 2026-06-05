@@ -174,26 +174,18 @@ DAG-level callbacks, `resume=True` for re-execution of cleared tasks.
 
 ### Contract
 
-Every plugin is a Pydantic model. Inherit from the action-specific base class:
-
-| Base Class               | Action Type     | Output Contract                |
-|--------------------------|-----------------|--------------------------------|
-| `BaseTaskPlugin`         | `task`          | Any `dict` or `None`           |
-| `BaseSensorPlugin`       | `sensor`        | `{"condition_met": True, ...}` |
-| `BaseBranchPlugin`       | `branch`        | `{"branch": ["task-id", ...]}` |
-| `BaseShortCircuitPlugin` | `short_circuit` | `{"continue": True\|False}`    |
-| `BasePlugin`             | all             | Generic (for plugin families)  |
+Every plugin is a plain Pydantic model that inherits from a single base class:
 
 ```python
-from beacon.core import BaseTaskPlugin, Context
+from beacon import BasePlugin, Context
 
-class MyTask(BaseTaskPlugin, plugin_name="my-task"):
-    # Typed inputs (validated by Pydantic; templated before instantiation)
+class MyTask(BasePlugin, plugin_name="my-task"):
+    # Typed inputs — validated by Pydantic, Jinja-rendered before instantiation
     source: str
     target: str
 
-    async def execute(self, context: Context) -> dict[str, Any]:
-        """Main logic. Return outputs dict (or None)."""
+    async def execute(self, context: Context):
+        """Main logic. Return a dict of outputs, any other value, or None."""
         ...
 
     async def teardown(self, context: Context) -> None:
@@ -205,17 +197,56 @@ class MyTask(BaseTaskPlugin, plugin_name="my-task"):
 If `plugin_name` is not provided, the snake_case of the class name is used
 (e.g., `MyTask` → `my_task`).
 
+A plugin can be used with **any** action type (`task`, `sensor`, `branch`,
+`short_circuit`). The action model owns the interpretation of the plugin's
+return value — see §5 and `action.extract_outputs`.
+
+### Raise Strategy (controls task flow)
+
+Plugins express control flow by raising exceptions, not by returning specific
+dict shapes. This keeps the plugin's logic clean and independent of the
+surrounding action type.
+
+| Raises          | Behavior                                      | Use case                          |
+|-----------------|-----------------------------------------------|-----------------------------------|
+| Any `Exception` | Retry up to `retries`, then `FAILED`          | Transient error (network timeout) |
+| `TaskRetry`     | Explicitly consume one retry slot, then retry | Intentional retry with a message  |
+| `TaskFailed`    | Immediately `FAILED`, exhaust retries         | Permanent failure (table missing) |
+| `TaskSkipped`   | Mark `SKIPPED`, no retries                    | Nothing to do (empty partition)   |
+
+Default when `execute` returns without raising: **success**. For branch and
+short_circuit actions this also means "take the success / continue path".
+
+```python
+from beacon import BasePlugin, TaskFailed, TaskRetry, TaskSkipped, Context
+
+class MyPlugin(BasePlugin, plugin_name="my-plugin"):
+    threshold: float
+
+    async def execute(self, context: Context):
+        score = await get_score()
+
+        if score < 0:
+            raise TaskFailed("invalid score — no point retrying")
+        if score == 0:
+            raise TaskSkipped("nothing to process this run")
+        if score < self.threshold:
+            raise TaskRetry(f"score {score} below threshold, will retry")
+
+        return {"score": score}   # dict → stored as task outputs
+```
+
 ### Plugin Families
 
-When you need the same logic across multiple action types, use an abstract
-base class for shared configuration, then inherit from action-specific bases:
+Use an abstract base class for shared configuration. All concrete subclasses
+inherit from `BasePlugin` directly — no action-type-specific intermediaries:
 
 ```python
 from abc import ABC, abstractmethod
-from beacon.core import BasePlugin, BaseTaskPlugin, BaseSensorPlugin
+from beacon import BasePlugin
 
 class GcsBase(BasePlugin, ABC):
-    """Shared config - NOT registered (has abstract method)."""
+    """Shared config — NOT registered (abstract execute keeps it out of registry)."""
     bucket: str
     prefix: str = ""
 
@@ -223,33 +254,31 @@ class GcsBase(BasePlugin, ABC):
     async def execute(self, context): ...
 
     async def _list_files(self) -> list[str]:
-        # Shared implementation
-        ...
+        ...  # Shared GCS logic
 
 class GcsCopy(GcsBase, plugin_name="gcs-copy"):
-    """Task: Copy files. Inherits compatible_actions from BaseTaskPlugin."""
+    """Works with a task action."""
     dest_bucket: str
 
     async def execute(self, context):
-        # Copy logic
-        return {"files_copied": 10}
+        count = await self._copy_files(self.dest_bucket)
+        return {"files_copied": count}
 
 class GcsSensor(GcsBase, plugin_name="gcs-sensor"):
-    """Sensor: Wait for files. Inherits compatible_actions from BaseSensorPlugin."""
+    """Works with a sensor action (or any other)."""
 
     async def execute(self, context):
         import asyncio
         check_interval = context.get("check_interval", 60)
-
         while True:
             files = await self._list_files()
             if files:
-                return {"condition_met": True, "files_found": len(files)}
+                return {"files_found": len(files)}
             await asyncio.sleep(check_interval)
 ```
 
-No inheritance chains. No mixins. No `template_fields` — every input
-that's a string is templated.
+No inheritance chains beyond the abstract base. No mixins. No
+`template_fields` — every string input is Jinja-rendered.
 
 ### Resolution
 
@@ -266,25 +295,6 @@ uses: "gcs-extract"              → ./plugins/gcs_extract.py
 uses: "my-org/etl@1.2.0"         → remote (future)
 ```
 
-### Error Signaling (controls retry)
-
-| Raises          | Behavior                             | Use case                           |
-|-----------------|--------------------------------------|------------------------------------|
-| Any `Exception` | Retry up to `retries`, then `FAILED` | Transient (network timeout)        |
-| `TaskFailed`    | Immediately `FAILED`, skip retries   | Permanent (table missing)          |
-| `TaskSkipped`   | Mark `SKIPPED`, skip retries         | Nothing to do (empty partition)    |
-
-```python
-from beacon.errors import TaskFailed, TaskSkipped
-
-async def execute(self, context: Context) -> dict:
-    if not await self.source_exists():
-        raise TaskFailed("Source does not exist, no point retrying")
-    rows = await self.fetch()
-    if not rows:
-        raise TaskSkipped("No new data this run")
-    return {"rows": len(rows)}
-```
 
 ### Two ways to add logic
 
@@ -295,7 +305,7 @@ async def execute(self, context: Context) -> dict:
 
 Example `uses: py` flow:
 
-```yaml title="dag.yml
+```yaml title="dag.yml"
 - id: transform
   type: task
   uses: py
@@ -356,19 +366,19 @@ Waits for an external condition. Plugin runs an async poke loop.
 | fail_mode           | str  | soft    | `soft` = SKIPPED on timeout; `silent` = SKIPPED on any errors |
 
 ```python
-from beacon.core import BaseSensorPlugin
+from beacon import BasePlugin, Context
 
-class GcsSensor(BaseSensorPlugin, plugin_name="gcs-sensor"):
+class GcsSensor(BasePlugin, plugin_name="gcs-sensor"):
     bucket: str
     prefix: str
 
-    async def execute(self, context: Context) -> dict:
+    async def execute(self, context: Context):
         from google.cloud import storage
         client = storage.Client()
         while True:
             blobs = list(client.list_blobs(self.bucket, prefix=self.prefix))
             if blobs:
-                return {"condition_met": True, "files_found": len(blobs)}
+                return {"files_found": len(blobs)}
             await asyncio.sleep(context.get("check_interval", 60))
 ```
 
@@ -380,13 +390,25 @@ separate triggerer.
 
 Chooses which downstream path(s) to schedule. Unchosen → SKIPPED.
 
-| Field   | Type      | Description                                  |
-|---------|-----------|----------------------------------------------|
-| success | list[str] | Default downstream if plugin returns truthy  |
-| failure | list[str] | Default downstream if plugin returns falsy   |
+| Field   | Type      | Description                                         |
+|---------|-----------|-----------------------------------------------------|
+| success | list[str] | Tasks scheduled when plugin resolves truthy/default |
+| failure | list[str] | Tasks scheduled when plugin resolves falsy          |
 
-**Plugin output:** `{"branch": ["task-id-1", "task-id-2"]}` — only
-listed IDs run; everything else in `success`+`failure` is SKIPPED.
+**Plugin return value** is interpreted by `Branch.extract_outputs` before
+`evaluate_downstream` sees it:
+
+| Plugin returns      | Result                                        |
+|---------------------|-----------------------------------------------|
+| `None` / no return  | `success` path (default)                      |
+| `True`              | `success` path                                |
+| `False`             | `failure` path                                |
+| `list[str]`         | Those exact task IDs are scheduled            |
+| `str`               | That single task ID is scheduled              |
+| `{"branch": [...]}` | Used directly (explicit, backward-compatible) |
+
+The plugin does **not** need to know the action's task ID lists. Use the
+raise strategy to deviate from the default success path:
 
 ```yaml
 - id: check-quality
@@ -397,16 +419,54 @@ listed IDs run; everything else in `success`+`failure` is SKIPPED.
   failure: [quarantine, alert]
 ```
 
+```python title="scripts/check_quality.py"
+# Return True/False — Branch handles routing
+def main():
+    score = run_quality_check()
+    return score >= 0.9       # True → process-good, False → quarantine+alert
+
+# Or return a list to choose specific paths
+def main():
+    if score >= 0.95:
+        return ["process-good"]           # skip quarantine, skip alert
+    if score >= 0.7:
+        return ["process-good", "alert"]  # process but also alert
+    return ["quarantine", "alert"]
+
+# Or raise to skip entirely
+def main():
+    from beacon import TaskSkipped
+    if not data_available():
+        raise TaskSkipped("no data — skip branching entirely")
+    return True
+```
+
 ### 5.4 ShortCircuit
 
-Returns `{"continue": True|False}`. False → SKIP all downstream
+Conditionally skips all downstream tasks. `False` → SKIP ALL downstream
 **recursively**.
+
+**Plugin return value** is interpreted by `ShortCircuit.extract_outputs`:
+
+| Plugin returns       | Result                               |
+|----------------------|--------------------------------------|
+| `None` / no return   | Continue (default)                   |
+| `True`               | Continue                             |
+| `False`              | Skip all downstream                  |
+| `{"continue": bool}` | Used directly (backward-compatible)  |
 
 ```yaml
 - id: should-run-today
   type: short_circuit
   uses: py
   inputs: { py_statement: ./scripts/check_if_needed.py }
+```
+
+```python title="scripts/check_if_needed.py"
+def main():
+    from datetime import datetime
+    # False → skip all downstream; True (or no return) → continue
+    return datetime.now().weekday() < 5   # only run on weekdays
 ```
 
 ### 5.5 Group
@@ -425,26 +485,28 @@ runner. Use to organize visually and apply shared upstream deps.
 
 ### Downstream scheduling per action type
 
-After a task completes the scheduler calls
-`action.evaluate_downstream(task_ctx, downstream_ids)` → returns
-`DownstreamDirective(schedule=[...], skip=[...])`.
+After a task succeeds the runner calls:
+1. `action.extract_outputs(raw_outputs)` — normalizes the plugin's raw return
+   value into a structured dict stored on `task_ctx.outputs`.
+2. `action.evaluate_downstream(task_ctx, downstream_ids)` — reads from the
+   normalized outputs and returns `DownstreamDirective(schedule=[...], skip=[...])`.
 
-| Action Type    | `evaluate_downstream()` logic                           |
-|----------------|---------------------------------------------------------|
-| Task           | Schedule all downstream                                 |
-| Sensor         | Schedule all downstream (condition met)                 |
-| Branch         | Schedule only `outputs["branch"]` list, skip rest       |
-| ShortCircuit   | If `outputs["continue"]` is False → skip ALL downstream |
-| Group          | Not invoked — flattened at parse time                   |
+| Action Type    | `extract_outputs` does                                     | `evaluate_downstream` logic                     |
+|----------------|------------------------------------------------------------|-------------------------------------------------|
+| Task           | Strips `_result` wrapper; passes dict through unchanged    | Schedule all downstream                         |
+| Sensor         | Same as Task                                               | Schedule all downstream (condition met)         |
+| Branch         | Maps return value → `{"branch": [...]}`; default → success | Schedule `outputs["branch"]`, skip the rest     |
+| ShortCircuit   | Maps return value → `{"continue": bool}`; default → `True` | `continue=False` → skip ALL downstream          |
+| Group          | Not invoked — flattened at parse time                      | —                                               |
 
-### Expected outputs per action type
+### Plugin outputs accessible to downstream tasks
 
-| Action Type  | Expected output shape              | Used for                        |
-|--------------|------------------------------------|---------------------------------|
-| Task         | `{"key": "value", ...}` (any dict) | Upstream outputs for downstream |
-| Sensor       | `{"condition_met": True, ...}`     | Proof that condition was met    |
-| Branch       | `{"branch": ["task-a", ...]}`      | Which path to take              |
-| ShortCircuit | `{"continue": True \| False}`      | Whether to proceed              |
+| Action Type  | What is stored in `TaskContext.outputs`   | Accessible via                            |
+|--------------|-------------------------------------------|-------------------------------------------|
+| Task         | Whatever `dict` the plugin returned       | `{{ outputs.task_id.key }}`               |
+| Sensor       | Whatever `dict` the plugin returned       | `{{ outputs.task_id.key }}`               |
+| Branch       | `{"branch": ["chosen-task-id", ...]}`     | Routing only — not typically used further |
+| ShortCircuit | `{"continue": True \| False}`             | Routing only — not typically used further |
 
 All outputs are stored in `TaskContext.outputs` and accessible via
 `{{ outputs.task_id.key }}` or `load_context().upstream_outputs["task_id"]`.
@@ -628,9 +690,9 @@ One task, inline cleanup.           Separate tasks, DAG-level lifecycle.
 ### Plugin-level teardown (in-task cleanup)
 
 ```python
-from beacon.core import BaseTaskPlugin
+from beacon import BasePlugin
 
-class SparkPlugin(BaseTaskPlugin, plugin_name="spark"):
+class SparkPlugin(BasePlugin, plugin_name="spark"):
     app_id: str = ""
 
     async def execute(self, context):
@@ -1235,24 +1297,26 @@ Not what env vars are for. Use:
 
 ## 17. Key Design Decisions
 
-| Decision                          | Rationale                                                               |
-|-----------------------------------|-------------------------------------------------------------------------|
-| Stateless DagRunner               | Restart without data loss; all state in metadata                        |
-| TaskContext is serializable       | Enables remote execution without DAG file mounts                        |
-| Parse once, version-tag           | Eliminates Airflow's re-parse-every-heartbeat bottleneck                |
-| DAG vs Deployment separation      | Reuse one DAG across many schedules/params                              |
-| Protocol-based MetadataStore      | Pluggable persistence without touching runner/worker code               |
-| Sharded metadata (by dag_id)      | Supports 1000+ DAGs without directory-listing degradation               |
-| Async-only execution              | Sensors don't waste worker slots; one event loop handles 100s of tasks  |
-| Plugin teardown in `finally`      | Resources always cleaned up — no leaks on failure/timeout               |
-| Two-pass Jinja rendering          | Outputs resolved late (worker); everything else resolved early (runner) |
-| NativeEnvironment + Sandbox       | Types preserved through templates AND security enforced                 |
-| `run_id` encodes trigger type     | Filter/group runs by how they were created                              |
-| Auto-clear teardown on clear/mark | Prevents resource leaks on re-run                                       |
-| Plugin registry (not pip install) | Fast resolution; no runtime installation; version-pinned                |
-| `TaskFailed` / `TaskSkipped`      | Plugins explicitly control retry-vs-permanent-fail behavior             |
-| Bounded upstream outputs          | Prevents unbounded XCom-style data growth                               |
-| DAG version pinning per run       | Mid-run DAG edits don't corrupt active instances                        |
+| Decision                               | Rationale                                                                    |
+|----------------------------------------|------------------------------------------------------------------------------|
+| Stateless DagRunner                    | Restart without data loss; all state in metadata                             |
+| TaskContext is serializable            | Enables remote execution without DAG file mounts                             |
+| Parse once, version-tag                | Eliminates Airflow's re-parse-every-heartbeat bottleneck                     |
+| DAG vs Deployment separation           | Reuse one DAG across many schedules/params                                   |
+| Protocol-based MetadataStore           | Pluggable persistence without touching runner/worker code                    |
+| Sharded metadata (by dag_id)           | Supports 1000+ DAGs without directory-listing degradation                    |
+| Async-only execution                   | Sensors don't waste worker slots; one event loop handles 100s of tasks       |
+| Plugin teardown in `finally`           | Resources always cleaned up — no leaks on failure/timeout                    |
+| Two-pass Jinja rendering               | Outputs resolved late (worker); everything else resolved early (runner)      |
+| NativeEnvironment + Sandbox            | Types preserved through templates AND security enforced                      |
+| `run_id` encodes trigger type          | Filter/group runs by how they were created                                   |
+| Auto-clear teardown on clear/mark      | Prevents resource leaks on re-run                                            |
+| Plugin registry (not pip install)      | Fast resolution; no runtime installation; version-pinned                     |
+| Single `BasePlugin` for all types      | Any plugin works with any action — no artificial restriction per action type |
+| Raise strategy (`TaskFailed` / `TaskSkipped` / `TaskRetry`) | Plugins express control flow via exceptions, not return-value contracts |
+| `action.extract_outputs` normalization | Action owns routing logic; plugin stays ignorant of DAG topology             |
+| Bounded upstream outputs               | Prevents unbounded XCom-style data growth                                    |
+| DAG version pinning per run            | Mid-run DAG edits don't corrupt active instances                             |
 
 ---
 

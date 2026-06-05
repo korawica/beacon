@@ -17,10 +17,6 @@ from .executor import BaseExecutor, LocalExecutor
 from .plugin import (
     PLUGINS_REGISTRY,
     BasePlugin,
-    BaseTaskPlugin,
-    BaseSensorPlugin,
-    BaseBranchPlugin,
-    BaseShortCircuitPlugin,
     register_plugin,
 )
 from .renderer import Renderer
@@ -32,10 +28,6 @@ __all__ = (
     "BaseAction",
     "BaseExecutor",
     "BasePlugin",
-    "BaseTaskPlugin",
-    "BaseSensorPlugin",
-    "BaseBranchPlugin",
-    "BaseShortCircuitPlugin",
     "Context",
     "LocalExecutor",
     "MetadataProtocol",

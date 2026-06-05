@@ -54,7 +54,7 @@ class TestPluginActionCompatibility:
         assert result.is_valid
 
     def test_branch_plugin_with_task_action(self):
-        """by_hours plugin used with task action → error."""
+        """by_hours plugin used with task action → valid (no compatible_actions restriction)."""
         dag = Dag(
             id="test",
             owners=["de"],
@@ -63,12 +63,11 @@ class TestPluginActionCompatibility:
             ],
         )
         result = dryrun(dag)
-        assert not result.is_valid
-        assert result.errors[0].category == "compatibility"
-        assert "only compatible with" in result.errors[0].message
+        # Any plugin can be used with any action type — no compatibility errors.
+        assert result.is_valid
 
     def test_generic_plugin_with_any_action(self):
-        """py plugin (no compatible_actions restriction) works with any action."""
+        """py plugin works with any action type."""
         dag = Dag(
             id="test",
             owners=["de"],

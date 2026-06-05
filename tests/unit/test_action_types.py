@@ -1,4 +1,4 @@
-"""Unit tests for action type evaluate_downstream() behavior."""
+"""Unit tests for action type extract_outputs() and evaluate_downstream() behavior."""
 
 from datetime import datetime
 
@@ -34,7 +34,45 @@ class TestTaskEvaluateDownstream:
         assert d.skip == []
 
 
+class TestBranchExtractOutputs:
+    """Tests for Branch.extract_outputs — the new normalization layer."""
+
+    def _branch(self):
+        return Branch(id="b1", uses="py", success=["good"], failure=["bad"])
+
+    def test_none_return_defaults_to_success(self):
+        # Plugin returned None → executor stores {} → success path
+        assert self._branch().extract_outputs({}) == {"branch": ["good"]}
+
+    def test_true_return_takes_success_path(self):
+        assert self._branch().extract_outputs({"_result": True}) == {
+            "branch": ["good"]
+        }
+
+    def test_false_return_takes_failure_path(self):
+        assert self._branch().extract_outputs({"_result": False}) == {
+            "branch": ["bad"]
+        }
+
+    def test_list_return_used_directly(self):
+        assert self._branch().extract_outputs({"_result": ["good", "bad"]}) == {
+            "branch": ["good", "bad"]
+        }
+
+    def test_str_return_wrapped_in_list(self):
+        assert self._branch().extract_outputs({"_result": "good"}) == {
+            "branch": ["good"]
+        }
+
+    def test_explicit_branch_dict_passed_through(self):
+        assert self._branch().extract_outputs({"branch": ["good"]}) == {
+            "branch": ["good"]
+        }
+
+
 class TestBranchEvaluateDownstream:
+    """Tests for Branch.evaluate_downstream — operates on already-normalised outputs."""
+
     def test_explicit_branch_choice(self):
         branch = Branch(
             id="b1",
@@ -59,26 +97,19 @@ class TestBranchEvaluateDownstream:
         assert set(d.schedule) == {"a", "c"}
         assert d.skip == ["b"]
 
-    def test_fallback_truthy_outputs(self):
-        branch = Branch(
-            id="b1",
-            uses="py",
-            success=["good"],
-            failure=["bad"],
-        )
-        ctx = _ctx({"some_data": True})  # truthy but no "branch" key
+    def test_full_flow_none_return_goes_to_success(self):
+        """Simulates the runner calling extract_outputs then evaluate_downstream."""
+        branch = Branch(id="b1", uses="py", success=["good"], failure=["bad"])
+        ctx = _ctx({})  # None return from plugin → {} stored by executor
+        ctx.outputs = branch.extract_outputs(ctx.outputs)
         d = branch.evaluate_downstream(ctx, ["good", "bad"])
         assert d.schedule == ["good"]
         assert d.skip == ["bad"]
 
-    def test_fallback_empty_outputs(self):
-        branch = Branch(
-            id="b1",
-            uses="py",
-            success=["good"],
-            failure=["bad"],
-        )
-        ctx = _ctx({})  # empty = falsy
+    def test_full_flow_false_return_goes_to_failure(self):
+        branch = Branch(id="b1", uses="py", success=["good"], failure=["bad"])
+        ctx = _ctx({"_result": False})
+        ctx.outputs = branch.extract_outputs(ctx.outputs)
         d = branch.evaluate_downstream(ctx, ["good", "bad"])
         assert d.schedule == ["bad"]
         assert d.skip == ["good"]
@@ -105,3 +136,28 @@ class TestShortCircuitEvaluateDownstream:
         d = sc.evaluate_downstream(ctx, ["t2"])
         assert d.schedule == ["t2"]
         assert d.skip == []
+
+
+class TestShortCircuitExtractOutputs:
+    """Tests for ShortCircuit.extract_outputs."""
+
+    def _sc(self):
+        return ShortCircuit(id="sc1", uses="py")
+
+    def test_none_return_defaults_to_continue(self):
+        assert self._sc().extract_outputs({}) == {"continue": True}
+
+    def test_false_return_stops(self):
+        assert self._sc().extract_outputs({"_result": False}) == {
+            "continue": False
+        }
+
+    def test_true_return_continues(self):
+        assert self._sc().extract_outputs({"_result": True}) == {
+            "continue": True
+        }
+
+    def test_explicit_continue_dict_passed_through(self):
+        assert self._sc().extract_outputs({"continue": False}) == {
+            "continue": False
+        }

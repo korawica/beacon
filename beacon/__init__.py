@@ -26,6 +26,9 @@ from .core.context import Context
 from .core.plugin import PLUGINS_REGISTRY, BasePlugin, register_plugin
 from .core.trigger_rule import TriggerRule
 
+# --- Raise strategy (control flow from inside a plugin) --------------------
+from .errors import TaskFailed, TaskRetry, TaskSkipped
+
 # --- Runtime / user task code ----------------------------------------------
 from .runtime import load_context
 
@@ -61,6 +64,10 @@ __all__ = (
     "PLUGINS_REGISTRY",
     "TriggerRule",
     "register_plugin",
+    # Raise strategy
+    "TaskFailed",
+    "TaskRetry",
+    "TaskSkipped",
     # Runtime
     "load_context",
     # Orchestration

@@ -172,30 +172,7 @@ def dryrun(
                 )
             )
 
-    # --- Check 2: Plugin ↔ action compatibility ---
-    for task_id, action in task_map.items():
-        plugin_name = (
-            action.uses
-            if isinstance(action.uses, str)
-            else getattr(action.uses, "plugin_name", "?")
-        )
-        if isinstance(action.uses, str) and action.uses in PLUGINS_REGISTRY:
-            plugin_cls = PLUGINS_REGISTRY[action.uses]
-            compatible = getattr(plugin_cls, "compatible_actions", ())
-            action_type = getattr(action, "type", "task")
-            if compatible and action_type not in compatible:
-                result.errors.append(
-                    DryRunIssue(
-                        task_id=task_id,
-                        category="compatibility",
-                        message=(
-                            f"Plugin {plugin_name!r} is only compatible with "
-                            f"{compatible}, but used with action type {action_type!r}."
-                        ),
-                    )
-                )
-
-    # --- Check 3: Upstream references exist ---
+    # --- Check 2: Upstream references exist ---
     all_ids = set(task_map.keys())
     for task_id, action in task_map.items():
         for up in action.upstream:
@@ -208,7 +185,7 @@ def dryrun(
                     )
                 )
 
-    # --- Check 3b: Teardown references exist ---
+    # --- Check 2b: Teardown references exist ---
     for task_id, action in task_map.items():
         teardown_ref = getattr(action, "teardown", None)
         if teardown_ref and teardown_ref not in all_ids:
@@ -231,7 +208,7 @@ def dryrun(
                 )
             )
 
-    # --- Check 4: Cycle detection ---
+    # --- Check 3: Cycle detection ---
     cycle = _detect_cycle(task_map)
     if cycle:
         result.errors.append(
@@ -242,11 +219,11 @@ def dryrun(
             )
         )
 
-    # --- Check 5: Topological sort (execution order) ---
+    # --- Check 4: Topological sort (execution order) ---
     if not cycle:
         result.task_order = _topological_sort(task_map)
 
-    # --- Check 6: Resolve inputs with Jinja (best-effort) ---
+    # --- Check 5: Resolve inputs with Jinja (best-effort) ---
     for task_id, action in task_map.items():
         plugin_name = (
             action.uses

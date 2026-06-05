@@ -321,14 +321,17 @@ class DagRunner:
         async def on_task_terminal(task_ctx: TaskContext, state: TaskState):
             local_states[task_ctx.task_id] = state
             result.states[task_ctx.task_id] = state
-            if task_ctx.outputs:
-                result.outputs[task_ctx.task_id] = task_ctx.outputs
-            # Apply branch / short-circuit directive on success.
             if state == TaskState.SUCCESS:
                 action = graph.task_map[task_ctx.task_id]
+                # Let the action normalize the raw plugin output into final
+                # structured outputs (e.g. branch list, continue flag) before
+                # evaluate_downstream reads from task_ctx.outputs.
+                task_ctx.outputs = action.extract_outputs(task_ctx.outputs)
                 all_down = graph.downstream.get(task_ctx.task_id, [])
                 directive = action.evaluate_downstream(task_ctx, all_down)
                 self._apply_directive(directive, local_states, forced_skip)
+            if task_ctx.outputs:
+                result.outputs[task_ctx.task_id] = task_ctx.outputs
             in_flight.discard(task_ctx.task_id)
             wake.set()
 

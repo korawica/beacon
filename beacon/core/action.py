@@ -108,6 +108,27 @@ class BaseAction(BaseModel):
         """
         return DownstreamDirective(schedule=all_downstream, skip=[])
 
+    def extract_outputs(self, raw_outputs: dict[str, Any]) -> dict[str, Any]:
+        """Normalize raw plugin output into the task's final outputs dict.
+
+        Called by the runner after execution succeeds, before
+        ``evaluate_downstream``. Subclasses (Branch, ShortCircuit) override
+        this to interpret the plugin's return value for routing.
+
+        The ``raw_outputs`` dict is produced by the executor:
+          - Plugin returned a ``dict``            → stored as-is.
+          - Plugin returned a non-dict (e.g. ``True``, ``["id-a"]``) → stored
+            as ``{"_result": <value>}``.
+          - Plugin returned ``None``              → stored as ``{}``.
+
+        Default: strips the internal ``_result`` wrapper for non-dict returns
+        (a bare non-dict result has no meaningful task outputs), otherwise
+        returns the dict unchanged.
+        """
+        if "_result" in raw_outputs and len(raw_outputs) == 1:
+            return {}
+        return raw_outputs
+
     def build_task_context(
         self,
         *,

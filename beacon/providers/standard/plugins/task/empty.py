@@ -1,11 +1,11 @@
 from typing import TYPE_CHECKING
 
-from .....core import BaseTaskPlugin
+from .....core import BasePlugin
 
 if TYPE_CHECKING:
     from .....core import Context
 
 
-class EmptyPlugin(BaseTaskPlugin, plugin_name="empty"):
+class EmptyPlugin(BasePlugin, plugin_name="empty"):
     async def execute(self, context: Context) -> None:
         pass

@@ -23,7 +23,7 @@ from contextlib import nullcontext
 from .context import Context
 from .plugin import PLUGINS_REGISTRY, BasePlugin
 from .task_context import AttemptStatus, TaskContext
-from ..errors import TaskFailed, TaskSkipped
+from ..errors import TaskFailed, TaskRetry, TaskSkipped
 from ..logging import (
     capture_stdout_stderr,
     should_capture_stdout,
@@ -137,7 +137,13 @@ class LocalExecutor(BaseExecutor):
 
             task_ctx.finish_attempt(
                 state=AttemptStatus.SUCCESS,
-                outputs=result if isinstance(result, dict) else {},
+                outputs=(
+                    result
+                    if isinstance(result, dict)
+                    else {"_result": result}
+                    if result is not None
+                    else {}
+                ),
             )
 
         except TimeoutError:
@@ -162,6 +168,16 @@ class LocalExecutor(BaseExecutor):
                 error_traceback=traceback.format_exc(),
             )
             task_ctx.retries = 0
+
+        except TaskRetry as exc:
+            # Plugin explicitly requests a retry — behaves like a normal
+            # failure so the worker's retry logic applies naturally.
+            task_ctx.finish_attempt(
+                state=AttemptStatus.FAILED,
+                error=str(exc) if str(exc) else "TaskRetry: retry requested",
+                error_traceback=traceback.format_exc(),
+            )
+            # Note: do NOT exhaust retries — worker decides whether to retry.
 
         except NotImplementedError as exc:
             # Plugin not registered: a permanent failure, no point retrying.

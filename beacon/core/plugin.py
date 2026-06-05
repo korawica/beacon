@@ -21,10 +21,6 @@ __all__ = (
     "BASE_PLUGIN_NAME",
     "PLUGINS_REGISTRY",
     "BasePlugin",
-    "BaseTaskPlugin",
-    "BaseSensorPlugin",
-    "BaseBranchPlugin",
-    "BaseShortCircuitPlugin",
     "register_plugin",
 )
 
@@ -154,17 +150,29 @@ class BasePlugin(BaseModel, ABC, metaclass=PluginMeta):
     (e.g., ``MyPlugin`` → ``my_plugin``).
 
     Plugins are plain Pydantic models — Jinja rendering is performed by the
-    scheduler **before** the plugin is instantiated.
+    scheduler **before** the plugin is instantiated. Plugins can be used with
+    any action type (task, sensor, branch, short_circuit).
+
+    Control flow is expressed by raising exceptions rather than by returning
+    specific dict shapes:
+
+        - ``raise TaskRetry("msg")``  → consume a retry slot and re-run
+        - ``raise TaskSkipped("msg")`` → mark the task SKIPPED
+        - ``raise TaskFailed("msg")`` → permanent failure, no retries
+
+    Default behaviour when ``execute`` returns without raising:
+        - The task succeeds.
+        - For a ``branch`` action, the *success* downstream path is taken.
+        - For a ``short_circuit`` action, all downstream tasks run normally.
+
+    Returning a ``dict`` stores it as the task's outputs for downstream access
+    via ``{{ outputs.<task_id>.<key> }}``.  Any other return value is usable
+    for action-level routing (e.g. returning ``True``/``False`` or a list of
+    task IDs for a ``branch`` action) and is interpreted by the action's own
+    ``extract_outputs`` method.
     """
 
     plugin_name: ClassVar[str] = BASE_PLUGIN_NAME
-    compatible_actions: ClassVar[tuple[str, ...]] = ()
-    """Action types this plugin is compatible with.
-
-    Empty tuple means compatible with all action types. Set e.g.
-    ``("branch",)`` to restrict to branch actions only. Enforced by
-    :func:`beacon.dryrun.dryrun`.
-    """
 
     template_ext: ClassVar[tuple[str, ...]] = ()
     """File extensions that trigger file-loading + Jinja rendering.
@@ -197,132 +205,3 @@ class BasePlugin(BaseModel, ABC, metaclass=PluginMeta):
 
         Default: no-op.
         """
-
-
-# =============================================================================
-# Specialized Plugin Base Classes
-# =============================================================================
-
-
-class BaseTaskPlugin(BasePlugin, ABC):
-    """Base class for TASK plugins.
-
-    Task plugins perform work and return results. The output dict is stored
-    as task outputs and accessible to downstream tasks via
-    ``{{ outputs.task_id.key }}`` or ``load_context().upstream_outputs``.
-
-    Output contract: ``dict[str, Any] | None`` — any dictionary or None.
-
-    Downstream behavior: All downstream tasks are scheduled on SUCCESS.
-
-    Example:
-        ```python
-        class MyTask(BaseTaskPlugin, plugin_name="my-task"):
-            source: str
-            target: str
-
-            async def execute(self, context: Context) -> dict[str, Any]:
-                # Do work
-                rows = await process(self.source, self.target)
-                return {"rows_processed": rows}
-        ```
-    """
-
-    compatible_actions: ClassVar[tuple[str, ...]] = ("task",)
-
-
-class BaseSensorPlugin(BasePlugin, ABC):
-    """Base class for SENSOR plugins.
-
-    Sensor plugins wait for an external condition to be met before proceeding.
-    They run in a polling loop managed by the executor.
-
-    Output contract: ``dict[str, Any]`` — typically ``{"condition_met": True, ...}``.
-
-    Context includes:
-        - ``check_interval``: Seconds between condition checks (default: 60)
-        - ``execution_timeout``: Max wait time before failing
-
-    Downstream behavior: All downstream tasks are scheduled when condition is met.
-
-    Example:
-        ```python
-        class GcsSensor(BaseSensorPlugin, plugin_name="gcs-sensor"):
-            bucket: str
-            prefix: str
-
-            async def execute(self, context: Context) -> dict[str, Any]:
-                import asyncio
-                from google.cloud import storage
-
-                client = storage.Client()
-                check_interval = context.get("check_interval", 60)
-
-                while True:
-                    blobs = list(client.list_blobs(self.bucket, prefix=self.prefix))
-                    if blobs:
-                        return {"condition_met": True, "files_found": len(blobs)}
-                    await asyncio.sleep(check_interval)
-        ```
-    """
-
-    compatible_actions: ClassVar[tuple[str, ...]] = ("sensor",)
-
-
-class BaseBranchPlugin(BasePlugin, ABC):
-    """Base class for BRANCH plugins.
-
-    Branch plugins choose which downstream path(s) to schedule. Unchosen
-    paths are marked as SKIPPED.
-
-    Output contract: ``{"branch": ["task-id-1", "task-id-2", ...]}`` — a list
-    of task IDs to run. Everything else in the action's ``success``/``failure``
-    lists is SKIPPED.
-
-    The action's ``success`` and ``failure`` fields define the candidate tasks.
-    The plugin returns which subset to actually run.
-
-    Downstream behavior: Only tasks in ``outputs["branch"]`` are scheduled.
-
-    Example:
-        ```python
-        class QualityBranch(BaseBranchPlugin, plugin_name="quality-branch"):
-            threshold: float
-
-            async def execute(self, context: Context) -> dict[str, Any]:
-                score = await get_quality_score()
-                if score >= self.threshold:
-                    return {"branch": context.get("success", [])}
-                return {"branch": context.get("failure", [])}
-        ```
-    """
-
-    compatible_actions: ClassVar[tuple[str, ...]] = ("branch",)
-
-
-class BaseShortCircuitPlugin(BasePlugin, ABC):
-    """Base class for SHORT_CIRCUIT plugins.
-
-    Short-circuit plugins decide whether to continue the DAG or skip ALL
-    downstream tasks recursively. Use for conditional execution based on
-    runtime conditions.
-
-    Output contract: ``{"continue": True | False}`` — whether to proceed.
-
-    Downstream behavior:
-        - ``{"continue": True}`` → all downstream scheduled normally
-        - ``{"continue": False}`` → ALL downstream tasks SKIPPED recursively
-
-    Example:
-        ```python
-        class RunToday(BaseShortCircuitPlugin, plugin_name="run-today"):
-            allowed_days: list[str] = ["monday", "wednesday", "friday"]
-
-            async def execute(self, context: Context) -> dict[str, Any]:
-                from datetime import datetime
-                today = datetime.now().strftime("%A").lower()
-                return {"continue": today in self.allowed_days}
-        ```
-    """
-
-    compatible_actions: ClassVar[tuple[str, ...]] = ("short_circuit",)

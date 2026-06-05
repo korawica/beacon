@@ -1,26 +1,26 @@
 from datetime import datetime
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 from pydantic import Field
 
-from .....core import BaseBranchPlugin
+from .....core import BasePlugin
 
 if TYPE_CHECKING:
     from .....core import Context
 
 
-class ByHourBranchPlugin(BaseBranchPlugin, plugin_name="by_hours"):
+class ByHourBranchPlugin(BasePlugin, plugin_name="by_hours"):
     hours: list[int] = Field(
         default_factory=list,
         description="Hours (0-23) that should take the success path.",
     )
 
-    async def execute(self, context: Context) -> dict[str, Any]:
-        """Return branch decision based on logical_date hour.
+    async def execute(self, context: Context) -> bool:
+        """Return True (success path) if the logical_date hour is in ``hours``.
 
-        Returns {"branch": [...]} with task IDs from success or failure list.
+        The Branch action's ``extract_outputs`` maps ``True`` → ``success``
+        and ``False`` → ``failure``, so the plugin no longer needs to know
+        about the action's task ID lists.
         """
         logical_date: datetime = context["logical_date"]
-        if logical_date.hour in self.hours:
-            return {"branch": context.get("success", [])}
-        return {"branch": context.get("failure", [])}
+        return logical_date.hour in self.hours

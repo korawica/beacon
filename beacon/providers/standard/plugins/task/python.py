@@ -54,7 +54,7 @@ from typing import Any, ClassVar, TYPE_CHECKING
 
 from pydantic import Field
 
-from .....core import BaseTaskPlugin
+from .....core import BasePlugin
 from .....core.context import build_runtime_dict
 from .....core.template import render_template_file, render_template_string
 from .....runtime import (
@@ -69,7 +69,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger("beacon.plugin.py")
 
 
-class PythonPlugin(BaseTaskPlugin, plugin_name="py"):
+class PythonPlugin(BasePlugin, plugin_name="py"):
     template_ext: ClassVar[tuple[str, ...]] = (".py",)
 
     py_statement: str = Field(
