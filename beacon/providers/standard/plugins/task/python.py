@@ -54,7 +54,8 @@ from typing import Any, ClassVar, TYPE_CHECKING
 
 from pydantic import Field
 
-from .....core import BasePlugin
+from .....core import BaseTaskPlugin
+from .....core.context import build_runtime_dict
 from .....core.template import render_template_file, render_template_string
 from .....runtime import (
     RuntimeContext,
@@ -68,29 +69,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger("beacon.plugin.py")
 
 
-class PythonPlugin(BasePlugin):
-    """Python Plugin.
-
-    Executes a Python function from a file or inline code string. The function
-    receives `params` as keyword arguments and can access runtime context via
-    `load_context()`.
-
-    !!! example
-
-        ```yaml
-        tasks:
-          - id: example
-            type: task
-            uses: py
-            inputs:
-              py_statement: ./example.py
-              py_function: main
-              params:
-                source_system: my_source
-        ```
-    """
-
-    plugin_name: ClassVar[str] = "py"
+class PythonPlugin(BaseTaskPlugin, plugin_name="py"):
     template_ext: ClassVar[tuple[str, ...]] = (".py",)
 
     py_statement: str = Field(
@@ -132,7 +111,16 @@ class PythonPlugin(BasePlugin):
             "vars": lambda n: context.get("vars", {}).get(
                 n, f"<unresolved: vars('{n}')>"
             ),
-            "runtime": context.get("runtime", {}),
+            "runtime": build_runtime_dict(
+                run_id=context.get("run_id", ""),
+                dag_id=context.get("dag_id", ""),
+                task_id=context.get("task_id", ""),
+                run_date=context.get("run_date"),
+                logical_date=context.get("logical_date"),
+                data_interval_start=context.get("data_interval_start"),
+                data_interval_end=context.get("data_interval_end"),
+                attempt_number=context.get("attempt_number", 1),
+            ),
             "outputs": context.get("upstream_outputs", {}),
         }
 
@@ -267,7 +255,16 @@ class PythonPlugin(BasePlugin):
             "vars": lambda n: context.get("vars", {}).get(
                 n, f"<unresolved: vars('{n}')>"
             ),
-            "runtime": context.get("runtime", {}),
+            "runtime": build_runtime_dict(
+                run_id=context.get("run_id", ""),
+                dag_id=context.get("dag_id", ""),
+                task_id=context.get("task_id", ""),
+                run_date=context.get("run_date"),
+                logical_date=context.get("logical_date"),
+                data_interval_start=context.get("data_interval_start"),
+                data_interval_end=context.get("data_interval_end"),
+                attempt_number=context.get("attempt_number", 1),
+            ),
             "outputs": context.get("upstream_outputs", {}),
         }
 

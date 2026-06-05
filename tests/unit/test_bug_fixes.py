@@ -13,21 +13,54 @@ from beacon.core.plugin import PLUGINS_REGISTRY, register_plugin
 # ─── plugin registry ─────────────────────────────────────────────────────
 
 
-def test_subclass_without_explicit_plugin_name_is_not_registered():
-    """Subclasses without an explicit plugin_name must NOT auto-register."""
+def test_subclass_without_explicit_plugin_name_gets_snakecase_name():
+    """Subclasses without an explicit plugin_name get snake_case name as fallback."""
 
     class IntermediateBase(BasePlugin):
-        """Abstract intermediate — should not be registered."""
+        """Intermediate base — gets auto-registered with snakecase name."""
 
         # Intentionally NO plugin_name declared here.
 
         async def execute(self, context):  # pragma: no cover
             ...
 
-    # Should not have been registered under any auto-generated name.
-    assert "intermediate_base" not in PLUGINS_REGISTRY
-    # Class still exists and inherits the base "base" name.
-    assert IntermediateBase.plugin_name == "base"
+    # With new behavior: auto-registered under snakecase name
+    assert "intermediate_base" in PLUGINS_REGISTRY
+    assert PLUGINS_REGISTRY["intermediate_base"] is IntermediateBase
+    # Class gets the auto-generated name
+    assert IntermediateBase.plugin_name == "intermediate_base"
+    # Clean up
+    PLUGINS_REGISTRY.pop("intermediate_base", None)
+
+
+def test_abstract_base_class_is_not_registered():
+    """Abstract bases with unimplemented execute() are NOT registered."""
+
+    from abc import abstractmethod
+
+    class AbstractGcsBase(BasePlugin):
+        """Abstract base for plugin family - should NOT be registered."""
+
+        source_bucket: str
+        dest_bucket: str
+
+        @abstractmethod
+        async def execute(self, context):
+            """Subclasses must implement."""
+
+    class GcsCopyTask(AbstractGcsBase, plugin_name="gcs-copy-test"):
+        """Concrete implementation - SHOULD be registered."""
+
+        async def execute(self, context):
+            return {"copied": 0}
+
+    # Abstract base should NOT be registered
+    assert "abstract_gcs_base" not in PLUGINS_REGISTRY
+    # Concrete subclass should be registered
+    assert "gcs-copy-test" in PLUGINS_REGISTRY
+    assert PLUGINS_REGISTRY["gcs-copy-test"] is GcsCopyTask
+    # Clean up
+    PLUGINS_REGISTRY.pop("gcs-copy-test", None)
 
 
 def test_subclass_with_plugin_name_is_registered():

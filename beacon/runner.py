@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Any
 
 from .callback import OnDagEvent
 from .core.action import BaseAction, DownstreamDirective
+from .core.context import build_runtime_dict
 from .core.executor import BaseExecutor, LocalExecutor
 from .core.renderer import Renderer
 from .core.state import TERMINAL_STATES, TaskState
@@ -549,16 +550,16 @@ class DagRunner:
                 "vars": lambda n: self.variables.get(
                     n, f"<unresolved: vars('{n}')>"
                 ),
-                "runtime": {
-                    "run_id": run_id,
-                    "dag_id": self.dag.id,
-                    "task_id": tid,
-                    "run_date": now,
-                    "logical_date": now,
-                    "data_interval_start": now,
-                    "data_interval_end": now,
-                    "attempt_number": 1,
-                },
+                "runtime": build_runtime_dict(
+                    run_id=run_id,
+                    dag_id=self.dag.id,
+                    task_id=tid,
+                    run_date=now,
+                    logical_date=now,
+                    data_interval_start=now,
+                    data_interval_end=now,
+                    attempt_number=1,
+                ),
                 "outputs": {},
             }
         )

@@ -136,9 +136,9 @@ Deployment ─ binds a Dag to: cron + tz + params + variable_overrides
 Dag(id="extract-load-table")
   │
   ├── Deployment(id="daily-customers-from-postgres",
-  │              cron="0 2 * * *", params={source: postgres})
+  │              cron="0 2 * * *", params={source: postgres}, owners=["tom"])
   └── Deployment(id="hourly-orders-from-mysql",
-                 cron="0 * * * *", params={source: mysql})
+                 cron="0 * * * *", params={source: mysql}, owners=["sara"])
 ```
 
 A `Deployment` carries:
@@ -174,15 +174,20 @@ DAG-level callbacks, `resume=True` for re-execution of cleared tasks.
 
 ### Contract
 
-Every plugin is a Pydantic model. One abstract method, one optional hook.
+Every plugin is a Pydantic model. Inherit from the action-specific base class:
+
+| Base Class               | Action Type     | Output Contract                |
+|--------------------------|-----------------|--------------------------------|
+| `BaseTaskPlugin`         | `task`          | Any `dict` or `None`           |
+| `BaseSensorPlugin`       | `sensor`        | `{"condition_met": True, ...}` |
+| `BaseBranchPlugin`       | `branch`        | `{"branch": ["task-id", ...]}` |
+| `BaseShortCircuitPlugin` | `short_circuit` | `{"continue": True\|False}`    |
+| `BasePlugin`             | all             | Generic (for plugin families)  |
 
 ```python
-from typing import ClassVar
-from beacon.core import BasePlugin, Context
+from beacon.core import BaseTaskPlugin, Context
 
-class MyPlugin(BasePlugin):
-    plugin_name: ClassVar[str] = "my-plugin"
-
+class MyTask(BaseTaskPlugin, plugin_name="my-task"):
     # Typed inputs (validated by Pydantic; templated before instantiation)
     source: str
     target: str
@@ -195,6 +200,52 @@ class MyPlugin(BasePlugin):
         """Cleanup. ALWAYS fires after execute (success or failure).
         Default: no-op. Override for resource cleanup."""
         ...
+```
+
+If `plugin_name` is not provided, the snake_case of the class name is used
+(e.g., `MyTask` → `my_task`).
+
+### Plugin Families
+
+When you need the same logic across multiple action types, use an abstract
+base class for shared configuration, then inherit from action-specific bases:
+
+```python
+from abc import ABC, abstractmethod
+from beacon.core import BasePlugin, BaseTaskPlugin, BaseSensorPlugin
+
+class GcsBase(BasePlugin, ABC):
+    """Shared config - NOT registered (has abstract method)."""
+    bucket: str
+    prefix: str = ""
+
+    @abstractmethod
+    async def execute(self, context): ...
+
+    async def _list_files(self) -> list[str]:
+        # Shared implementation
+        ...
+
+class GcsCopy(GcsBase, plugin_name="gcs-copy"):
+    """Task: Copy files. Inherits compatible_actions from BaseTaskPlugin."""
+    dest_bucket: str
+
+    async def execute(self, context):
+        # Copy logic
+        return {"files_copied": 10}
+
+class GcsSensor(GcsBase, plugin_name="gcs-sensor"):
+    """Sensor: Wait for files. Inherits compatible_actions from BaseSensorPlugin."""
+
+    async def execute(self, context):
+        import asyncio
+        check_interval = context.get("check_interval", 60)
+
+        while True:
+            files = await self._list_files()
+            if files:
+                return {"condition_met": True, "files_found": len(files)}
+            await asyncio.sleep(check_interval)
 ```
 
 No inheritance chains. No mixins. No `template_fields` — every input
@@ -305,8 +356,9 @@ Waits for an external condition. Plugin runs an async poke loop.
 | fail_mode           | str  | soft    | `soft` = SKIPPED on timeout; `silent` = SKIPPED on any errors |
 
 ```python
-class GcsSensor(BasePlugin):
-    plugin_name: ClassVar[str] = "gcs-sensor"
+from beacon.core import BaseSensorPlugin
+
+class GcsSensor(BaseSensorPlugin, plugin_name="gcs-sensor"):
     bucket: str
     prefix: str
 
@@ -316,7 +368,7 @@ class GcsSensor(BasePlugin):
         while True:
             blobs = list(client.list_blobs(self.bucket, prefix=self.prefix))
             if blobs:
-                return {"files_found": len(blobs)}
+                return {"condition_met": True, "files_found": len(blobs)}
             await asyncio.sleep(context.get("check_interval", 60))
 ```
 
@@ -576,8 +628,9 @@ One task, inline cleanup.           Separate tasks, DAG-level lifecycle.
 ### Plugin-level teardown (in-task cleanup)
 
 ```python
-class SparkPlugin(BasePlugin):
-    plugin_name: ClassVar[str] = "spark"
+from beacon.core import BaseTaskPlugin
+
+class SparkPlugin(BaseTaskPlugin, plugin_name="spark"):
     app_id: str = ""
 
     async def execute(self, context):

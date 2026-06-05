@@ -61,6 +61,7 @@ __all__ = (
     "capture_stdout_stderr",
     "configure_logging",
     "get_dispatcher",
+    "should_capture_stdout",
     "shutdown_logging",
     "task_log_context",
 )

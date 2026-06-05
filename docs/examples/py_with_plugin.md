@@ -108,15 +108,11 @@ The plugins must be keep and install to your package and install it before
 deploy beacon.
 
 ```python
-from typing import ClassVar
-
-from beacon import BasePlugin, Context
+from beacon import BaseTaskPlugin, Context
 
 
-class BigQueryCount(BasePlugin):
+class BigQueryCount(BaseTaskPlugin, plugin_name="bigquery_count"):
     """BigQuery Count Task."""
-
-    plugin_name: ClassVar["str"] = "bigquery_count"
 
     source_system: str
     bucket: str
@@ -127,10 +123,8 @@ class BigQueryCount(BasePlugin):
         print(context["params"]["source_system"])  # type: ignore
 
 
-class CloudStorageWithPrefix(BasePlugin):
+class CloudStorageWithPrefix(BaseTaskPlugin, plugin_name="cloud_storage_with_prefix"):
     """Cloud Storage With Prefix Sensor."""
-
-    plugin_name: ClassVar["str"] = "cloud_storage_with_prefix"
 
     source_system: str
     bucket: str

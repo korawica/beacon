@@ -16,6 +16,54 @@ if TYPE_CHECKING:
     from .task_context import TaskContext
 
 
+# =============================================================================
+# Helper Functions
+# =============================================================================
+
+
+def build_runtime_dict(
+    run_id: str,
+    dag_id: str,
+    task_id: str,
+    run_date: datetime,
+    logical_date: datetime,
+    data_interval_start: datetime,
+    data_interval_end: datetime,
+    attempt_number: int,
+) -> dict[str, Any]:
+    """Build the runtime dict for Jinja template context.
+
+    This helper ensures consistent runtime dict structure across:
+    - runner.py (first-pass render)
+    - worker.py (second-pass render)
+    - dryrun.py (validation)
+    - python.py (Jinja templates)
+
+    Args:
+        run_id: DagRun ID
+        dag_id: DAG ID
+        task_id: Task ID within the DAG
+        run_date: Wall-clock when DagRun was created
+        logical_date: Logical date (= data_interval_start)
+        data_interval_start: Data interval start
+        data_interval_end: Data interval end
+        attempt_number: Current attempt number (1-based)
+
+    Returns:
+        Dict with runtime info for Jinja templates.
+    """
+    return {
+        "run_id": run_id,
+        "dag_id": dag_id,
+        "task_id": task_id,
+        "run_date": run_date,
+        "logical_date": logical_date,
+        "data_interval_start": data_interval_start,
+        "data_interval_end": data_interval_end,
+        "attempt_number": attempt_number,
+    }
+
+
 class MetadataProtocol(Protocol):
     """Protocol that all metadata stores must satisfy.
 
@@ -101,8 +149,9 @@ class Context(TypedDict, total=False):
     """Outputs from upstream tasks: {task_id: {key: value}}."""
 
     # Services (injected by executor)
-    metadata: MetadataProtocol
-    """Access to metadata store (read/write task context)."""
-
     logger: logging.Logger
     """Structured logger → Logging Store."""
+
+    # Future: metadata access (Phase 2+)
+    # metadata: MetadataProtocol
+    # """Access to metadata store (read/write task context)."""

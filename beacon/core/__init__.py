@@ -14,7 +14,15 @@ need them.
 from .action import BaseAction
 from .context import Context, MetadataProtocol
 from .executor import BaseExecutor, LocalExecutor
-from .plugin import PLUGINS_REGISTRY, BasePlugin, register_plugin
+from .plugin import (
+    PLUGINS_REGISTRY,
+    BasePlugin,
+    BaseTaskPlugin,
+    BaseSensorPlugin,
+    BaseBranchPlugin,
+    BaseShortCircuitPlugin,
+    register_plugin,
+)
 from .renderer import Renderer
 from .state import TaskState
 from .task_context import TaskContext
@@ -24,6 +32,10 @@ __all__ = (
     "BaseAction",
     "BaseExecutor",
     "BasePlugin",
+    "BaseTaskPlugin",
+    "BaseSensorPlugin",
+    "BaseBranchPlugin",
+    "BaseShortCircuitPlugin",
     "Context",
     "LocalExecutor",
     "MetadataProtocol",

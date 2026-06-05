@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from .core.context import build_runtime_dict
 from .core.plugin import PLUGINS_REGISTRY
 from .models.dag import Dag
 
@@ -395,16 +396,16 @@ def _render_inputs(
         "params": params,
         "vars": vars_func,
         "outputs": {},
-        "runtime": {
-            "run_id": f"dryrun-{dag_id}",
-            "dag_id": dag_id,
-            "task_id": task_id,
-            "run_date": logical_date,
-            "logical_date": logical_date,
-            "data_interval_start": data_interval_start,
-            "data_interval_end": data_interval_end,
-            "attempt_number": 1,
-        },
+        "runtime": build_runtime_dict(
+            run_id=f"dryrun-{dag_id}",
+            dag_id=dag_id,
+            task_id=task_id,
+            run_date=logical_date,
+            logical_date=logical_date,
+            data_interval_start=data_interval_start,
+            data_interval_end=data_interval_end,
+            attempt_number=1,
+        ),
     }
     renderer = Renderer(ctx)
     rendered: dict[str, Any] = {}

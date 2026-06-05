@@ -21,7 +21,7 @@ import logging
 from dataclasses import dataclass, field
 
 from .callback import OnTaskEvent
-from .core.context import MetadataProtocol
+from .core.context import MetadataProtocol, build_runtime_dict
 from .core.executor import BaseExecutor, LocalExecutor
 from .core.state import TaskState
 from .core.task_context import AttemptStatus, TaskContext
@@ -318,16 +318,16 @@ class Worker:
                 "outputs": task_ctx.upstream_outputs,
                 # vars/runtime were resolved at trigger time — pass empty/static.
                 "vars": lambda n: f"<unresolved: vars('{n}')>",
-                "runtime": {
-                    "run_id": task_ctx.run_id,
-                    "dag_id": task_ctx.dag_id,
-                    "task_id": task_ctx.task_id,
-                    "run_date": task_ctx.run_date,
-                    "logical_date": task_ctx.logical_date,
-                    "data_interval_start": task_ctx.data_interval_start,
-                    "data_interval_end": task_ctx.data_interval_end,
-                    "attempt_number": task_ctx.attempt_number + 1,
-                },
+                "runtime": build_runtime_dict(
+                    run_id=task_ctx.run_id,
+                    dag_id=task_ctx.dag_id,
+                    task_id=task_ctx.task_id,
+                    run_date=task_ctx.run_date,
+                    logical_date=task_ctx.logical_date,
+                    data_interval_start=task_ctx.data_interval_start,
+                    data_interval_end=task_ctx.data_interval_end,
+                    attempt_number=task_ctx.attempt_number + 1,
+                ),
             }
         )
         try:
