@@ -55,28 +55,14 @@ class BaseExecutor(ABC):
         raise NotImplementedError
 
     def _resolve_plugin(self, plugin_name: str) -> type[BasePlugin]:
-        """Resolve plugin class from registry.
+        """Resolve plugin class from local registry.
 
-        For remote refs (``org/repo@version`` / ``package@version``),
-        checks the registry under the version-stripped key
-        (``org/repo`` / ``package``) after :func:`install_and_register` has
-        been called from :meth:`run_task`.
+        Remote refs (``org/repo@version``) are handled separately in
+        :meth:`LocalExecutor.run_task` via :func:`run_remote_plugin` and
+        never reach this method.
         """
         if plugin_name in PLUGINS_REGISTRY:
             return PLUGINS_REGISTRY[plugin_name]
-
-        # Check version-stripped registry key for remote refs.
-        from ..core.remote_plugin import is_remote_ref, ref_to_plugin_name
-
-        if is_remote_ref(plugin_name):
-            lookup = ref_to_plugin_name(plugin_name)
-            if lookup in PLUGINS_REGISTRY:
-                return PLUGINS_REGISTRY[lookup]
-            raise NotImplementedError(
-                f"Remote plugin {plugin_name!r} was installed but no plugin "
-                f"named {lookup!r} is registered. Check the package's "
-                f'[project.entry-points."beacon.plugins"] declaration.'
-            )
 
         raise NotImplementedError(
             f"Plugin {plugin_name!r} not found in registry."
@@ -109,8 +95,6 @@ class LocalExecutor(BaseExecutor):
             executor_ref=None,
         )
 
-        # Logger reaches the unified logging pipeline; ContextVar tags
-        # attribute every record to this (dag_id, run_id, task_id, attempt).
         task_logger = logging.getLogger(
             f"beacon.task.{task_ctx.dag_id}.{task_ctx.task_id}"
         )
@@ -136,15 +120,84 @@ class LocalExecutor(BaseExecutor):
             else nullcontext()
         )
 
-        try:
-            # Install remote plugins (org/repo@version) before registry lookup.
-            from ..core.remote_plugin import is_remote_ref, install_and_register
+        from .remote_plugin import (
+            EXIT_SUCCESS,
+            EXIT_TASK_FAILED,
+            EXIT_TASK_RETRY,
+            EXIT_TASK_SKIPPED,
+            is_remote_ref,
+            run_remote_plugin,
+        )
 
-            if is_remote_ref(task_ctx.plugin_name):
-                await asyncio.to_thread(
-                    install_and_register, task_ctx.plugin_name
+        # --- Remote plugin: run in isolated uv env, communicate via exit code ---
+        if is_remote_ref(task_ctx.plugin_name):
+            try:
+                with task_log_context(
+                    task_ctx.dag_id,
+                    task_ctx.run_id,
+                    task_ctx.task_id,
+                    task_ctx.attempt_number,
+                ):
+                    if task_ctx.execution_timeout:
+                        async with asyncio.timeout(task_ctx.execution_timeout):
+                            result, exit_code = await run_remote_plugin(
+                                task_ctx.plugin_name,
+                                task_ctx.inputs,
+                                context,  # type: ignore[arg-type]
+                            )
+                    else:
+                        result, exit_code = await run_remote_plugin(
+                            task_ctx.plugin_name,
+                            task_ctx.inputs,
+                            context,  # type: ignore[arg-type]
+                        )
+
+                if exit_code == EXIT_SUCCESS:
+                    task_ctx.finish_attempt(
+                        state=AttemptStatus.SUCCESS,
+                        outputs=result or {},
+                    )
+                elif exit_code == EXIT_TASK_SKIPPED:
+                    task_ctx.finish_attempt(state=AttemptStatus.SKIPPED)
+                    task_ctx.retries = 0
+                elif exit_code == EXIT_TASK_FAILED:
+                    task_ctx.finish_attempt(
+                        state=AttemptStatus.FAILED,
+                        error=f"Remote plugin {task_ctx.plugin_name!r} exited with TASK_FAILED",
+                    )
+                    task_ctx.retries = 0
+                elif exit_code == EXIT_TASK_RETRY:
+                    task_ctx.finish_attempt(
+                        state=AttemptStatus.FAILED,
+                        error=f"Remote plugin {task_ctx.plugin_name!r} requested retry",
+                    )
+                    # Do NOT exhaust retries — let worker retry naturally.
+                else:
+                    # EXIT_FAILURE or any unexpected non-zero exit
+                    task_ctx.finish_attempt(
+                        state=AttemptStatus.FAILED,
+                        error=(
+                            f"Remote plugin {task_ctx.plugin_name!r} "
+                            f"exited with code {exit_code}"
+                        ),
+                    )
+
+            except TimeoutError:
+                task_ctx.finish_attempt(
+                    state=AttemptStatus.TIMED_OUT,
+                    error=f"Execution timed out after {task_ctx.execution_timeout}s",
+                )
+            except Exception as exc:
+                task_ctx.finish_attempt(
+                    state=AttemptStatus.FAILED,
+                    error=str(exc),
+                    error_traceback=traceback.format_exc(),
                 )
 
+            return task_ctx
+
+        # --- Local in-process plugin ---
+        try:
             plugin_cls = self._resolve_plugin(task_ctx.plugin_name)
             plugin_instance = plugin_cls.model_validate(task_ctx.inputs)
 
