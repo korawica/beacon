@@ -48,7 +48,7 @@ def test_manual_trigger_fires_a_dag_run(tmp_path: Path) -> None:
 
     async def go() -> None:
         await meta.upsert_deployment({"id": "d1", "dag_id": "hello"})
-        await meta.enqueue_trigger("d1", params={})
+        await meta.enqueue_trigger("d1", variables={})
         sched = DeploymentScheduler(bundle, meta)
         await _drive(sched, ticks=1)
 
@@ -67,7 +67,7 @@ def test_unknown_deployment_trigger_is_skipped_not_fatal(
     meta = LocalMetadata(tmp_path / "m")
 
     async def go() -> None:
-        await meta.enqueue_trigger("ghost", params={})
+        await meta.enqueue_trigger("ghost", variables={})
         sched = DeploymentScheduler(bundle, meta)
         await _drive(sched, ticks=1)
 

@@ -40,7 +40,47 @@ def trigger(
     if dep is None:
         click.echo(f"Unknown deployment: {deployment_id!r}", err=True)
         sys.exit(1)
-    tid = asyncio.run(
-        meta.enqueue_trigger(deployment_id, parse_kv_options(variables))
-    )
+
+    parsed_vars = parse_kv_options(variables)
+
+    # Validate variables against deployment requirements
+    errors = _validate_trigger_variables(dep, parsed_vars)
+    if errors:
+        for e in errors:
+            click.echo(f"Error: {e}", err=True)
+        click.echo(
+            "Hint: Required variables can be set with --var KEY=VALUE",
+            err=True,
+        )
+        sys.exit(1)
+
+    tid = asyncio.run(meta.enqueue_trigger(deployment_id, parsed_vars))
     click.echo(f"trigger enqueued: {tid}  (deployment={deployment_id})")
+
+
+def _validate_trigger_variables(
+    dep: dict, trigger_vars: dict[str, str]
+) -> list[str]:
+    """Validate trigger variables against deployment requirements.
+
+    Returns a list of error messages. Empty list means valid.
+    """
+    errors: list[str] = []
+    requirements = dep.get("variable_requirements", {})
+    if not requirements:
+        # No requirements tracked - allow any variables
+        return errors
+
+    deployment_overrides = dep.get("variable_overrides", {})
+
+    for key, spec in requirements.items():
+        has_default = spec.get("has_default", False)
+        # Check if provided via trigger or deployment overrides
+        provided = key in trigger_vars or key in deployment_overrides
+
+        if not has_default and not provided:
+            errors.append(
+                f"Required variable {key!r} not provided. Use --var {key}=VALUE"
+            )
+
+    return errors

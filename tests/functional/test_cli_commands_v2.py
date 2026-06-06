@@ -59,7 +59,7 @@ def test_deploy_creates_record(runner: CliRunner, tmp_path: Path) -> None:
             "etl",
             "--cron",
             "0 * * * *",
-            "--param",
+            "--var",
             "src=pg",
             "--owner",
             "alice",
@@ -71,7 +71,7 @@ def test_deploy_creates_record(runner: CliRunner, tmp_path: Path) -> None:
     rec = asyncio.run(LocalMetadata(meta).get_deployment("d1"))
     assert rec["dag_id"] == "etl"
     assert rec["cron"] == "0 * * * *"
-    assert rec["params"] == {"src": "pg"}
+    assert rec["variable_overrides"] == {"src": "pg"}
     assert rec["owners"] == ["alice"]
     assert rec["enabled"] is True
 
@@ -265,11 +265,11 @@ def test_trigger_enqueues(runner: CliRunner, tmp_path: Path) -> None:
     )
     res = runner.invoke(
         cli,
-        ["trigger", "d", "--param", "k=v", "--metadata-path", str(meta)],
+        ["trigger", "d", "--var", "k=v", "--metadata-path", str(meta)],
     )
     assert res.exit_code == 0
     assert "trigger enqueued" in res.output
 
     drained = asyncio.run(LocalMetadata(meta).drain_triggers("d"))
     assert len(drained) == 1
-    assert drained[0]["params"] == {"k": "v"}
+    assert drained[0]["variables"] == {"k": "v"}

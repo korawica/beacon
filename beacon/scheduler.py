@@ -51,6 +51,30 @@ from .runner import DagRunner
 logger = logging.getLogger("beacon.scheduler")
 
 
+def _validate_trigger_variables(
+    dep: dict, trigger_vars: dict[str, Any]
+) -> list[str]:
+    """Validate trigger variables against deployment requirements.
+
+    Returns a list of error messages. Empty list means valid.
+    """
+    errors: list[str] = []
+    requirements = dep.get("variable_requirements", {})
+    if not requirements:
+        return errors
+
+    deployment_overrides = dep.get("variable_overrides", {})
+
+    for key, spec in requirements.items():
+        has_default = spec.get("has_default", False)
+        provided = key in trigger_vars or key in deployment_overrides
+
+        if not has_default and not provided:
+            errors.append(f"Required variable {key!r} not provided")
+
+    return errors
+
+
 def _parse_iso(value: Any) -> datetime | None:
     if value is None:
         return None
@@ -226,6 +250,17 @@ class DeploymentScheduler:
         if dep is None:
             logger.warning("Trigger for unknown deployment %r", deployment_id)
             return
+
+        # Validate trigger variables against requirements (defense in depth)
+        validation_errors = _validate_trigger_variables(dep, override_variables)
+        if validation_errors:
+            logger.error(
+                "Invalid trigger for %s: %s",
+                deployment_id,
+                "; ".join(validation_errors),
+            )
+            return
+
         dag = self._dags.get(dep["dag_id"])
         if dag is None:
             logger.error(

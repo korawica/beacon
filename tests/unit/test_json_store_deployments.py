@@ -70,8 +70,8 @@ def test_list_empty_deployments(meta: LocalMetadata) -> None:
 
 
 def test_enqueue_and_drain_triggers(meta: LocalMetadata) -> None:
-    t1 = _run(meta.enqueue_trigger("d1", params={"x": 1}))
-    t2 = _run(meta.enqueue_trigger("d1", params={"x": 2}))
+    t1 = _run(meta.enqueue_trigger("d1", variables={"x": 1}))
+    t2 = _run(meta.enqueue_trigger("d1", variables={"x": 2}))
     assert t1 != t2
 
     drained = _run(meta.drain_triggers("d1"))

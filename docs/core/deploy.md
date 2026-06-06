@@ -250,7 +250,7 @@ You can plan a DAG with a specific param + variable set without creating a
 Deployment.
 
 ```bash
-beacon dryrun \
+beacon plan \
   --dag-id extract-load-table \
   --timezone Asia/Bangkok \
   --param source_system=postgres \
@@ -395,11 +395,11 @@ from disk**; it polls the metadata store on every tick.
 ### Validation — `beacon sync`
 
 `beacon sync PATH` reloads plugins, loads every variables file, and
-dry-runs every DAG in the bundle. It exits non-zero if anything fails
+plan every DAG in the bundle. It exits non-zero if anything fails
 to parse — wire it into your CI step or pre-restart hook.
 
 ```bash
-beacon sync ./my-workflow-repo   # exits 1 on parse / dryrun failure
+beacon sync ./my-workflow-repo   # exits 1 on parse / plan failure
 ```
 
 Sync also computes the new `dag_version`. Deployments without `--var`

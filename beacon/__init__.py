@@ -13,7 +13,6 @@ from .models.branch import Branch
 from .models.dag import Dag
 from .models.deployment import Deployment
 from .models.group import Group
-from .models.param import Param
 from .models.sensor import Sensor
 from .models.short_circuit import ShortCircuit
 from .models.task import Task
@@ -50,7 +49,6 @@ __all__ = (
     "Dag",
     "Deployment",
     "Group",
-    "Param",
     "Sensor",
     "ShortCircuit",
     "Task",

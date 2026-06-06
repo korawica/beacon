@@ -81,20 +81,20 @@ def _reset():
     yield
 
 
-def test_scheduler_renders_params_at_enqueue(tmp_path):
+def test_scheduler_renders_variables_at_enqueue(tmp_path):
     dag = Dag(
-        id="render-params",
+        id="render-vars",
         actions=[
             Task(
                 id="t",
                 uses="_render_capture",
-                inputs={"value": "src={{ params.src }}"},
+                inputs={"value": "src={{ vars('src') }}"},
             ),
         ],
     )
     meta = LocalMetadata(tmp_path / "meta")
     sched = DagRunner(dag, meta=meta)
-    asyncio.run(sched.run(params={"src": "postgres"}))
+    asyncio.run(sched.run(variables={"src": "postgres"}))
     assert _CAPTURED["t"] == "src=postgres"
 
 

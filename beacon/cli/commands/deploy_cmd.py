@@ -2,14 +2,19 @@
 
 import asyncio
 import sys
+from typing import TYPE_CHECKING
 
 import click
 from croniter import croniter
 
 from ...metadata import LocalMetadata
 from ...models.deployment import Deployment
+from ...plan import plan
 from ..settings import get
 from ._shared import parse_kv_options
+
+if TYPE_CHECKING:
+    from ...models.dag import Dag
 
 
 @click.command()
@@ -52,6 +57,17 @@ from ._shared import parse_kv_options
     default=None,
     help="Defaults to $BEACON_METADATA_PATH.",
 )
+@click.option(
+    "--bundle",
+    "bundle_path",
+    default=None,
+    type=click.Path(exists=True, file_okay=False),
+    help=(
+        "Bundle directory to analyze DAG variable requirements. "
+        "When provided, extracts required variables from the DAG and stores "
+        "them on the deployment for trigger-time validation."
+    ),
+)
 def deploy(
     deployment_id: str,
     dag_id: str,
@@ -62,6 +78,7 @@ def deploy(
     owners: tuple[str, ...],
     disabled: bool,
     metadata_path: str | None,
+    bundle_path: str | None,
 ) -> None:
     """Register (or update) a Deployment in metadata.
 
@@ -73,6 +90,36 @@ def deploy(
         click.echo(f"Invalid cron expression: {cron!r}", err=True)
         sys.exit(2)
 
+    # Analyze DAG for variable requirements if bundle is provided
+    variable_requirements: dict[str, dict] = {}
+    if bundle_path:
+        dag = _load_dag_for_deployment(dag_id, bundle_path)
+        if dag:
+            plan_result = plan(dag, variables={})
+            variable_requirements = {
+                v.key: {
+                    "has_default": v.has_default,
+                    **(
+                        {"default_value": v.default_value}
+                        if v.has_default
+                        else {}
+                    ),
+                }
+                for v in plan_result.required_variables
+            }
+            if plan_result.required_variables:
+                required_str = ", ".join(
+                    f"{v.key}{'?' if v.has_default else ''}"
+                    for v in plan_result.required_variables
+                )
+                click.echo(f"Variable requirements: {required_str}")
+        else:
+            click.echo(
+                f"Warning: DAG {dag_id!r} not found in bundle, "
+                f"skipping variable analysis",
+                err=True,
+            )
+
     dep = Deployment(
         id=deployment_id,
         dag_id=dag_id,
@@ -81,6 +128,7 @@ def deploy(
         desc=desc,
         enabled=not disabled,
         variable_overrides=parse_kv_options(variable_overrides),
+        variable_requirements=variable_requirements,
         owners=list(owners),
     )
 
@@ -91,3 +139,14 @@ def deploy(
         f"Deployment {dep.id!r} → dag={dep.dag_id} cron={dep.cron!r}{pinned}"
     )
     click.echo(f"enabled={dep.enabled}  metadata={meta.base_path}")
+
+
+def _load_dag_for_deployment(dag_id: str, bundle_path: str) -> Dag | None:
+    """Load a specific DAG from bundle for variable analysis."""
+    from ..loader import load_dags
+
+    dags = load_dags(bundle_path)
+    for d in dags:
+        if d.id == dag_id:
+            return d
+    return None

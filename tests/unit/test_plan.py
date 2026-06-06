@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from beacon import Dag, Task, Param
+from beacon import Dag, Task
 from beacon.plan import plan, PlanResult, PlannedTask
 from beacon.models.branch import Branch
 
@@ -177,45 +177,6 @@ class TestGraphValidation:
 
 
 class TestTemplateRendering:
-    def test_renders_params(self):
-        dag = Dag(
-            id="test",
-            owners=["de"],
-            params=[Param(name="source", type="str", default="default_src")],
-            actions=[
-                Task(
-                    id="t1",
-                    uses="py",
-                    inputs={
-                        "py_statement": "./script.py",
-                    },
-                ),
-            ],
-        )
-        result = plan(dag, params={"source": "orders"})
-        assert result.is_valid
-        t = result.planned_tasks[0]
-        assert t.inputs["py_statement"] == "./script.py"
-
-    def test_renders_jinja_params(self):
-        dag = Dag(
-            id="test",
-            owners=["de"],
-            params=[Param(name="source", type="str", default="x")],
-            actions=[
-                Task(
-                    id="t1",
-                    uses="empty",
-                    inputs={
-                        "value": "{{ params.source }}",
-                    },
-                ),
-            ],
-        )
-        result = plan(dag, params={"source": "orders"})
-        assert result.is_valid
-        assert result.planned_tasks[0].inputs["value"] == "orders"
-
     def test_renders_variables(self):
         dag = Dag(
             id="test",

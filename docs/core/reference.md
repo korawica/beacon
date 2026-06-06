@@ -146,6 +146,8 @@ A `Deployment` carries:
 - Schedule (`cron`, `start_date`, `end_date`, `timezone`, `catch_up`)
 - Variable overrides (`variable_overrides` — layered on top of the
   bundle's scoped `variables.yml` / `global_variables.yml` chain)
+- Variable requirements (`variable_requirements` — extracted from DAG
+  templates at deploy time via `--bundle`; used to validate triggers)
 - Version pin (`dag_version`, optional)
 - Owners, labels, `enabled` flag
 
@@ -1197,11 +1199,15 @@ Constraints:
 
 ```text
 ┌─ Deploy ────────────────────────────────────────────────────────────┐
-│  beacon deploy ... or beacon sync /path                              │
+│  beacon deploy --bundle ./bundle ...                                 │
 │  1. Parse DAG from bundle (YAML/Python)                              │
 │  2. Validate (``beacon plan`` — plugins exist, no cycles)            │
-│  3. Serialize Dag + Deployment → Metadata                            │
-│  4. Tag Dag with bundle version (content hash / commit SHA)          │
+│  3. Extract variable requirements from DAG templates                 │
+│     - Detects `{{ vars("key") }}` and `{{ vars("key", default) }}`  │
+│  4. Serialize Deployment → Metadata                                  │
+│     - variable_overrides: per-deployment values                      │
+│     - variable_requirements: required vs optional variables         │
+│  5. Tag Dag with bundle version (content hash / commit SHA)          │
 └─────────────────────────┬───────────────────────────────────────────┘
                           ▼
 ┌─ Schedule trigger (Phase 2) ────────────────────────────────────────┐

@@ -96,6 +96,16 @@ class Deployment(BaseModel):
     )
 
     # --- Labels / Ownership ---
+    variable_requirements: dict[str, dict] = Field(
+        default_factory=dict,
+        description=(
+            "Variable requirements extracted from DAG templates at deploy time. "
+            "Keys are variable names, values contain: "
+            "'has_default' (bool) and optionally 'default_value'. "
+            "Used by trigger command to validate custom variables before runtime."
+        ),
+    )
+
     owners: list[str] = Field(
         default_factory=list,
         description="Owners of this deployment (overrides Dag.owners if set)",

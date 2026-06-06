@@ -2,11 +2,11 @@
 
 Validates the core "DAG reuse" concept that distinguishes Beacon from Airflow:
 
-  - A `Dag` is a reusable template (defines tasks + param schema).
-  - A `Deployment` binds a `Dag` to specific runtime config (cron, params,
+  - A `Dag` is a reusable template (defines tasks + variable requirements).
+  - A `Deployment` binds a `Dag` to specific runtime config (cron,
     variable_overrides, start/end_date) and has its own UI identity.
   - Multiple Deployments can reference the same `dag_id` with different
-    params — each produces independent runs and shows under its own name.
+    variable_overrides — each produces independent runs and shows under its own name.
 """
 
 from datetime import datetime
@@ -16,7 +16,6 @@ from pydantic import ValidationError
 
 from beacon.models.dag import Dag
 from beacon.models.deployment import Deployment
-from beacon.models.param import Param
 from beacon.models.task import Task
 
 
@@ -24,22 +23,17 @@ from beacon.models.task import Task
 
 
 def _reusable_etl_dag() -> Dag:
-    """A reusable ETL DAG that takes (source_name, target_table, columns)."""
+    """A reusable ETL DAG that uses variables for source/target."""
     return Dag(
         id="extract-load-table",
         desc="Reusable extract→load pipeline parameterised by source/target",
         owners=["data-platform"],
-        params=[
-            Param(name="source_name", type="str", default=None),
-            Param(name="target_table", type="str", default=None),
-            Param(name="columns", type="array", default=[]),
-        ],
         actions=[
             Task(
                 id="extract",
                 uses="empty",
                 inputs={
-                    "source": "{{ params.source_name }}",
+                    "source": "{{ vars('source_name') }}",
                     "cols_count": 0,
                 },
             ),
@@ -48,7 +42,7 @@ def _reusable_etl_dag() -> Dag:
                 uses="empty",
                 upstream=["extract"],
                 inputs={
-                    "table": "{{ params.target_table }}",
+                    "table": "{{ vars('target_table') }}",
                 },
             ),
         ],
@@ -68,12 +62,11 @@ class TestDeploymentReuse:
             cron="0 2 * * *",
             timezone="UTC",
             start_date=datetime(2026, 1, 1),
-            params={
+            variable_overrides={
                 "source_name": "postgres_main",
                 "target_table": "customers",
-                "columns": ["id", "email", "created_at"],
+                "stage": "prod",
             },
-            variable_overrides={"stage": "prod"},
         )
 
         deploy_orders = Deployment(
@@ -82,12 +75,11 @@ class TestDeploymentReuse:
             cron="0 * * * *",
             timezone="Asia/Bangkok",
             start_date=datetime(2026, 6, 1),
-            params={
+            variable_overrides={
                 "source_name": "mysql_replica",
                 "target_table": "orders",
-                "columns": ["order_id", "customer_id", "total"],
+                "stage": "prod",
             },
-            variable_overrides={"stage": "prod"},
         )
 
         # Both deployments stored overrides → both are pinned.
@@ -102,7 +94,10 @@ class TestDeploymentReuse:
 
         # Distinct runtime config
         assert deploy_customers.cron != deploy_orders.cron
-        assert deploy_customers.params != deploy_orders.params
+        assert (
+            deploy_customers.variable_overrides
+            != deploy_orders.variable_overrides
+        )
 
     def test_deployment_with_no_cron_is_manual_only(self):
         """Deployment without cron is valid (manual-trigger-only)."""
@@ -110,7 +105,10 @@ class TestDeploymentReuse:
             id="adhoc-backfill",
             dag_id="extract-load-table",
             start_date=datetime(2026, 1, 1),
-            params={"source_name": "snowflake", "target_table": "events"},
+            variable_overrides={
+                "source_name": "snowflake",
+                "target_table": "events",
+            },
         )
         assert d.cron is None
         assert d.enabled is True
@@ -122,7 +120,6 @@ class TestDeploymentReuse:
             dag_id="extract-load-table",
             dag_version="v1.2.3",
             start_date=datetime(2026, 1, 1),
-            params={"source_name": "x", "target_table": "y"},
         )
         assert d.dag_version == "v1.2.3"
 
@@ -133,7 +130,6 @@ class TestDeploymentReuse:
             dag_id="extract-load-table",
             cron="0 0 * * *",
             start_date=datetime(2026, 1, 1),
-            params={"source_name": "x", "target_table": "y"},
             enabled=False,
         )
         assert d.enabled is False
@@ -149,7 +145,6 @@ class TestDeploymentValidation:
                 dag_id="any-dag",
                 start_date=datetime(2026, 6, 1),
                 end_date=datetime(2026, 1, 1),  # before start
-                params={},
             )
         assert "end_date" in str(exc_info.value)
 
@@ -160,7 +155,6 @@ class TestDeploymentValidation:
                 dag_id="any-dag",
                 start_date=datetime(2026, 6, 1),
                 end_date=datetime(2026, 6, 1),
-                params={},
             )
 
     def test_dag_id_is_required(self):
@@ -168,7 +162,6 @@ class TestDeploymentValidation:
             Deployment(
                 id="missing-dag-id",
                 start_date=datetime(2026, 1, 1),
-                params={},
             )
 
     def test_id_is_required(self):
@@ -176,7 +169,6 @@ class TestDeploymentValidation:
             Deployment(
                 dag_id="some-dag",
                 start_date=datetime(2026, 1, 1),
-                params={},
             )
 
     def test_defaults(self):
@@ -193,8 +185,8 @@ class TestDeploymentValidation:
         assert d.dag_version is None
         assert d.cron is None
         assert d.end_date is None
-        assert d.params == {}
         assert d.variable_overrides == {}
+        assert d.variable_requirements == {}
         assert d.is_pinned is False
         assert d.owners == []
         assert d.labels == {}
@@ -211,8 +203,18 @@ class TestDeploymentSerialization:
             timezone="UTC",
             start_date=datetime(2026, 1, 1),
             end_date=datetime(2026, 12, 31),
-            params={"source_name": "pg", "target_table": "users"},
-            variable_overrides={"stage": "prod"},
+            variable_overrides={
+                "source_name": "pg",
+                "target_table": "users",
+                "stage": "prod",
+            },
+            variable_requirements={
+                "source_name": {"has_default": False},
+                "target_table": {
+                    "has_default": True,
+                    "default_value": "default_table",
+                },
+            },
             labels={"team": "data-platform", "tier": "critical"},
             owners=["alice@example.com"],
         )
@@ -222,8 +224,8 @@ class TestDeploymentSerialization:
 
         assert restored.id == d.id
         assert restored.dag_id == d.dag_id
-        assert restored.params == d.params
+        assert restored.variable_overrides == d.variable_overrides
+        assert restored.variable_requirements == d.variable_requirements
         assert restored.labels == d.labels
         assert restored.owners == d.owners
-        assert restored.variable_overrides == d.variable_overrides
         assert restored.is_pinned == d.is_pinned

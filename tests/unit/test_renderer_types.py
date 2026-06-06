@@ -107,25 +107,25 @@ def test_mixed_template_returns_string(tmpl, ctx, expected) -> None:
 
 def test_recursive_dict_preserves_types_per_leaf() -> None:
     inputs = {
-        "count": "{{ params.count }}",
-        "rows": "{{ params.rows }}",
-        "enabled": "{{ params.enabled }}",
-        "label": "src={{ params.source }}",  # mixed → str
-        "nested": {"limit": "{{ params.limit }}"},
+        "count": "{{ vars.count }}",
+        "rows": "{{ vars.rows }}",
+        "enabled": "{{ vars.enabled }}",
+        "label": "src={{ vars.source }}",  # mixed → str
+        "nested": {"limit": "{{ vars.limit }}"},
         "leaves": [
-            "{{ params.count }}",  # int
+            "{{ vars.count }}",  # int
             "literal",  # str
             123,  # passthrough int
         ],
     }
-    params = {
+    variables = {
         "count": 5,
         "rows": [1, 2, 3],
         "enabled": True,
         "source": "postgres",
         "limit": 1000,
     }
-    out = Renderer({"params": params}).render(inputs)
+    out = Renderer({"vars": variables}).render(inputs)
 
     assert out["count"] == 5 and type(out["count"]) is int
     assert out["rows"] == [1, 2, 3] and type(out["rows"]) is list
@@ -140,16 +140,16 @@ def test_recursive_dict_preserves_types_per_leaf() -> None:
 
 
 def test_dict_method_name_gotcha_is_documented() -> None:
-    """Jinja's `foo.bar` does getattr-then-getitem. Naming a params key
+    """Jinja's `foo.bar` does getattr-then-getitem. Naming a vars key
     after a dict method (`items`, `keys`, `values`, ...) silently returns
-    the bound method. Users should use `params['items']` in that case.
+    the bound method. Users should use `vars['items']` in that case.
     Pinning this so it's a documented gotcha, not a surprise regression."""
-    params = {"items": [1, 2, 3]}
+    variables = {"items": [1, 2, 3]}
     # Dotted access returns the bound method (str-ified by NativeTemplate).
-    out = Renderer({"params": params}).render("{{ params.items }}")
+    out = Renderer({"vars": variables}).render("{{ vars.items }}")
     assert out != [1, 2, 3]  # NOT what you might want
     # Bracket access works correctly.
-    out_bracket = Renderer({"params": params}).render("{{ params['items'] }}")
+    out_bracket = Renderer({"vars": variables}).render("{{ vars['items'] }}")
     assert out_bracket == [1, 2, 3]
 
 
@@ -225,7 +225,7 @@ def _reset_captured():
     yield
 
 
-def test_e2e_typed_plugin_receives_real_types_from_params(tmp_path):
+def test_e2e_typed_plugin_receives_real_types_from_variables(tmp_path):
     dag = Dag(
         id="typed-render",
         actions=[
@@ -233,12 +233,12 @@ def test_e2e_typed_plugin_receives_real_types_from_params(tmp_path):
                 id="t",
                 uses="_typed_capture",
                 inputs={
-                    "count": "{{ params.count }}",
-                    "ratio": "{{ params.ratio }}",
-                    "enabled": "{{ params.enabled }}",
-                    "rows": "{{ params.rows }}",
-                    "config": "{{ params.config }}",
-                    "label": "src={{ params.source }}",  # mixed → str
+                    "count": "{{ vars('count') }}",
+                    "ratio": "{{ vars('ratio') }}",
+                    "enabled": "{{ vars('enabled') }}",
+                    "rows": "{{ vars('rows') }}",
+                    "config": "{{ vars('config') }}",
+                    "label": "src={{ vars('source') }}",  # mixed → str
                 },
             ),
         ],
@@ -247,7 +247,7 @@ def test_e2e_typed_plugin_receives_real_types_from_params(tmp_path):
     sched = DagRunner(dag, meta=meta)
     asyncio.run(
         sched.run(
-            params={
+            variables={
                 "count": 7,
                 "ratio": 0.25,
                 "enabled": True,
@@ -276,12 +276,13 @@ def test_e2e_false_bool_does_not_become_truthy_string(tmp_path):
             Task(
                 id="t",
                 uses="_typed_capture",
-                inputs={"enabled": "{{ params.enabled }}"},
+                inputs={"enabled": "{{ vars('enabled') }}"},
             ),
         ],
     )
     sched = DagRunner(dag, meta=LocalMetadata(tmp_path / "meta"))
-    asyncio.run(sched.run(params={"enabled": False}))
+    asyncio.run(sched.run(variables={"enabled": False}))
+
     assert _CAPTURED["t"]["enabled"] is False
 
 
