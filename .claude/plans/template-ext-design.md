@@ -114,7 +114,6 @@ This is already available in `PythonPlugin.execute()` via the `context` paramete
 | File |
 |------|
 | `tests/unit/test_task_context.py` |
-| `tests/unit/test_dryrun.py` |
 | `tests/e2e/test_bundle_e2e.py` |
 | `tests/e2e/test_phase1_e2e.py` |
 | `tests/e2e/test_py_plugin_logging.py` |

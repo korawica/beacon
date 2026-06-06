@@ -20,7 +20,6 @@ from .commands import (
     config_cmd,
     deploy_cmd,
     deployment_cmd,
-    dryrun_cmd,
     list_cmd,
     logs_cmd,
     plan_cmd,
@@ -39,7 +38,6 @@ def cli() -> None:
 
 
 cli.add_command(plan_cmd.plan)
-cli.add_command(dryrun_cmd.dryrun)  # hidden deprecated alias
 cli.add_command(test_cmd.test)
 cli.add_command(run_cmd.run)
 cli.add_command(deploy_cmd.deploy)

@@ -85,7 +85,7 @@ A team can do all of the following without our help:
 8. **Self-heal** — stuck-task detector flips zombie tasks; log
    rotation keeps disks from filling; metadata GC keeps the DB from
    growing forever.
-9. **Test locally** — `dag.dryrun()`, `dag.test()`, `dag.run()` work
+9. **Test locally** — `dag.plan()`, `dag.test()`, `dag.run()` work
    identically to production (✅ done).
 10. **Auth** — basic auth or static bearer-token at the API. Nothing
     fancy. (OIDC is post-v1.)
@@ -113,25 +113,25 @@ secrets adapter, audit log.
 
 ### Phase 1 — Library complete
 
-| Deliverable                                                                                 | Status   | Validates                                            |
-|---------------------------------------------------------------------------------------------|----------|------------------------------------------------------|
-| Callback system with registry resolution                                                    | ✅        | Callback parity Python/YAML                          |
-| Async worker with retry scheduling                                                          | ✅        | Full lifecycle transitions                           |
-| `MetadataProtocol` + `LocalMetadata` (sharded)                                              | ✅        | Pluggable persistence, 1000+ DAGs                    |
-| `TaskFailed` / `TaskSkipped` exception support                                              | ✅        | Plugin-driven retry/skip control                     |
-| `Deployment` model (reusable DAG + per-env config)                                          | ✅        | DAG reuse without duplication                        |
-| `Dag.run()` / `Dag.test()` / `Dag.dryrun()` methods                                         | ✅        | Developer workflow (validate → test → run)           |
+| Deliverable                                                                                | Status   | Validates                                            |
+|--------------------------------------------------------------------------------------------|----------|------------------------------------------------------|
+| Callback system with registry resolution                                                   | ✅        | Callback parity Python/YAML                          |
+| Async worker with retry scheduling                                                         | ✅        | Full lifecycle transitions                           |
+| `MetadataProtocol` + `LocalMetadata` (sharded)                                             | ✅        | Pluggable persistence, 1000+ DAGs                    |
+| `TaskFailed` / `TaskSkipped` exception support                                             | ✅        | Plugin-driven retry/skip control                     |
+| `Deployment` model (reusable DAG + per-env config)                                         | ✅        | DAG reuse without duplication                        |
+| `Dag.run()` / `Dag.test()` / `Dag.plan()` methods                                          | ✅        | Developer workflow (validate → test → run)           |
 | `DagRunner` (trigger rules, branch, teardown, DAG callbacks; renamed from `LocalScheduler`) | ✅        | Full DAG lifecycle in-process                        |
-| `DagRunner.clear()` + `resume=True` + `Dag.clear()` (backfill / fix-and-rerun)              | ✅        | Clear past task, re-execute keeping upstream outputs |
-| Setup & Teardown (`teardown` field + scheduler)                                             | ✅        | Cluster/staging lifecycle                            |
-| Lean Jinja renderer (SandboxedEnvironment only)                                             | ✅        | Two-pass: trigger-time + execute-time                |
+| `DagRunner.clear()` + `resume=True` + `Dag.clear()` (backfill / fix-and-rerun)             | ✅        | Clear past task, re-execute keeping upstream outputs |
+| Setup & Teardown (`teardown` field + scheduler)                                            | ✅        | Cluster/staging lifecycle                            |
+| Lean Jinja renderer (SandboxedEnvironment only)                                            | ✅        | Two-pass: trigger-time + execute-time                |
 
 ### Phase 1.5 — Close the loop on local-first
 
-| #     | Deliverable                                                                                | Status | DoD § |
-|-------|--------------------------------------------------------------------------------------------|--------|-------|
-| 1.5.1 | Structured logging pipeline (unified, batched, JSONL, file/memory sinks)                   | ✅      | §5.1  |
-| 1.5.2 | `beacon` CLI (`dryrun`, `test`, `run`, `deploy`, `sync`, `list`, `logs`, `config show`, …) | ✅      | §5.2  |
+| #     | Deliverable                                                                              | Status | DoD § |
+|-------|------------------------------------------------------------------------------------------|--------|-------|
+| 1.5.1 | Structured logging pipeline (unified, batched, JSONL, file/memory sinks)                 | ✅      | §5.1  |
+| 1.5.2 | `beacon` CLI (`plan`, `test`, `run`, `deploy`, `sync`, `list`, `logs`, `config show`, …) | ✅      | §5.2  |
 
 ### Phase 2 — Production deployment
 
@@ -189,7 +189,7 @@ Already shipped. See `beacon/logging.py`.
 A single CLI replaces ad-hoc Python scripts.
 
 ```text
-beacon dryrun  PATH
+beacon plan  PATH
 beacon test    PATH [--params k=v ...]
 beacon run     PATH [--params k=v ...]
 beacon deploy  PATH [--cron ...] [--params ...] [--var k=v ...]
@@ -604,13 +604,13 @@ it, OR a maintainer with time to own it. No speculative builds.
 
 ### 8.1 Testing strategy
 
-| Layer        | Tooling      | Proves                                        |
-|--------------|--------------|-----------------------------------------------|
-| Unit         | pytest       | Pure logic correctness                        |
-| Functional   | pytest       | Component integration without I/O boundaries  |
-| e2e          | pytest       | Real DAG → real metadata → real logs          |
-| Bench        | pytest-bench | Throughput regressions caught in CI           |
-| Smoke (prod) | shell        | Post-deploy `beacon dryrun examples/*` passes |
+| Layer        | Tooling      | Proves                                       |
+|--------------|--------------|----------------------------------------------|
+| Unit         | pytest       | Pure logic correctness                       |
+| Functional   | pytest       | Component integration without I/O boundaries |
+| e2e          | pytest       | Real DAG → real metadata → real logs         |
+| Bench        | pytest-bench | Throughput regressions caught in CI          |
+| Smoke (prod) | shell        | Post-deploy `beacon plan examples/*` passes  |
 
 **Rule:** every new public API ships with one unit + one e2e test in
 the same PR.
@@ -693,7 +693,7 @@ deployment trigger on schedule, hit the API to pause/trigger/cancel a
 run, stream per-attempt JSONL logs with `beacon logs`, and trust that
 stuck tasks won't lock pipelines and disks won't fill — all backed by
 one process, one SQLite file, env-var config, the same
-`dag.dryrun()` they ran on their laptop, and a documented
+`dag.plan()` they ran on their laptop, and a documented
 systemd-timer recipe for deployment. **Nothing in that sentence
 references Airflow concepts, a UI, or a config file.** That is the
 bar.

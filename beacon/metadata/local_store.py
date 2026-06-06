@@ -21,11 +21,11 @@ import logging
 import os
 import tempfile
 import uuid
-from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from ..core.protocols import BaseMetadata
 from ..core.state import TaskState
 from ..core.task_context import TaskContext
 
@@ -34,10 +34,18 @@ logger = logging.getLogger("beacon.metadata")
 _CACHE_SIZE = 4096
 
 
-class LocalMetadata:
-    """JSON file metadata store optimized for 1000+ DAG workloads."""
+class LocalMetadata(BaseMetadata):
+    """JSON file metadata store optimized for 1000+ DAG workloads.
+
+    Implements MetadataProtocol via BaseMetadata inheritance.
+    Suitable for single-node deployments (dev → 1000 DAGs).
+
+    For multi-node production, use SqliteMetadata (Phase 2) or
+    PostgresMetadata (Phase 3).
+    """
 
     def __init__(self, base_path: str | Path = "./metadata.db") -> None:
+        super().__init__()  # Initialize LRU cache from BaseMetadata
         self.base_path = Path(base_path)
         self._dag_runs_dir = self.base_path / "dag_runs"
         self._task_contexts_dir = self.base_path / "task_contexts"
@@ -52,11 +60,6 @@ class LocalMetadata:
             self._triggers_dir,
         ):
             d.mkdir(parents=True, exist_ok=True)
-
-        # LRU cache for task states. We're async-single-thread so no lock.
-        self._state_cache: OrderedDict[str, TaskState] = OrderedDict()
-        # Active run index: dag_id -> set of run_ids
-        self._active_runs: dict[str, set[str]] = {}
 
     # --- DagRun ---
 

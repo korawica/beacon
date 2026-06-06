@@ -44,7 +44,7 @@ metadata.db/
 | Directory operations | `glob()`, `iterdir()` per list operation | O(dag_runs_dir) scan on `list_dag_runs()` |
 | Thread pool pressure | Every read/write uses `asyncio.to_thread` | Default thread pool may saturate |
 
-**Critical code path** (`json_store.py:231-258`):
+**Critical code path** (`local_store.py:231-258`):
 ```python
 async def get_all_task_states(self, run_id: str, dag_id: str) -> dict[str, TaskState]:
     run_dir = self._task_states_dir / dag_id / run_id
@@ -273,7 +273,7 @@ message is lost. Should wrap in try/except.
 
 ### 4.2 Missing index on triggers
 
-**File:** `json_store.py:375-400`
+**File:** `local_store.py:375-400`
 ```python
 async def drain_triggers(self, deployment_id: str | None = None):
     if deployment_id is not None:
@@ -298,7 +298,7 @@ This reads ALL deployment files every tick. Should cache.
 
 ### 4.4 No cleanup of completed runs
 
-**File:** `json_store.py` — no method to purge old runs.
+**File:** `local_store.py` — no method to purge old runs.
 
 Over time, `dag_runs/` directory grows unbounded. Need a cleanup job.
 

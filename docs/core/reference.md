@@ -36,6 +36,7 @@ complexity.
 | Cross-task data  | XCom (unbounded shuttle)             | TaskContext (per-task, bounded)       |
 | Remote execution | KubernetesExecutor + sidecar         | Executor reads TaskContext from store |
 | DAG reuse        | 1 file = 1 DAG = 1 schedule          | 1 DAG, N Deployments                  |
+| Catch-up         | All missed runs fired immediately    | Batched with `max_active_runs`        |
 | Scaling          | Multi-scheduler + DB tuning          | Stateless scheduler + queue           |
 
 ---
@@ -144,12 +145,45 @@ Dag(id="extract-load-table")
 A `Deployment` carries:
 - Identity (`Deployment.id` shown in UI)
 - Schedule (`cron`, `start_date`, `end_date`, `timezone`, `catch_up`)
+- Concurrency (`max_active_runs` — limit concurrent runs per deployment)
 - Variable overrides (`variable_overrides` — layered on top of the
   bundle's scoped `variables.yml` / `global_variables.yml` chain)
 - Variable requirements (`variable_requirements` — extracted from DAG
   templates at deploy time via `--bundle`; used to validate triggers)
 - Version pin (`dag_version`, optional)
 - Owners, labels, `enabled` flag
+
+### Catch-up Scheduling
+
+When a deployment is created with `catch_up=True` and a past `start_date`:
+
+```yaml
+id: daily-etl
+dag_id: etl-pipeline
+cron: "0 0 * * *"
+start_date: "2026-03-01T00:00:00"  # 3 months ago
+catch_up: true
+max_active_runs: 2  # limit concurrent backfill runs
+```
+
+On first scheduler start:
+
+```text
+Catch-up for daily-etl: 97 missed run(s) from 2026-03-01 to 2026-06-05
+RUN daily-etl (scheduled) → dag=etl-pipeline run_id=scheduled-etl-pipeline-20260301T000000
+RUN daily-etl (scheduled) → dag=etl-pipeline run_id=scheduled-etl-pipeline-20260302T000000
+Catch-up paused for daily-etl: max_active_runs (2) reached, 95 run(s) remaining
+```
+
+As runs complete, remaining catch-up runs are scheduled.
+
+**Difference from Airflow:**
+
+| Airflow                             | Beacon                            |
+|-------------------------------------|-----------------------------------|
+| All missed runs queued immediately  | Batching via `max_active_runs`    |
+| No per-deployment concurrency limit | `max_active_runs` per deployment  |
+| Run order depends on DB query       | Explicit ASC order (oldest first) |
 
 ### Dag user API (Phase 1)
 

@@ -76,20 +76,6 @@ def test_plan_missing_dag_id(runner: CliRunner, tmp_path: Path) -> None:
     assert "ghost" in res.output
 
 
-# ---------- dryrun (backward-compat alias) --------------------------------
-
-
-def test_dryrun_alias_still_works(runner: CliRunner, tmp_path: Path) -> None:
-    """``beacon dryrun`` is a deprecated alias; it must still succeed."""
-    f = _write(tmp_path / "d.py", DAG_OK)
-    res = runner.invoke(cli, ["dryrun", str(f)])
-    assert res.exit_code == 0
-    assert "PASS" in res.output
-
-
-# ---------- test ----------------------------------------------------------
-
-
 def test_test_runs_dag_to_success(runner: CliRunner, tmp_path: Path) -> None:
     f = _write(tmp_path / "d.py", DAG_OK)
     res = runner.invoke(cli, ["test", str(f)])

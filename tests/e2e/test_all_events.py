@@ -24,7 +24,7 @@ import pytest
 
 from beacon.callback import OnTaskEvent
 from beacon.core import TaskContext, TaskState
-from beacon.metadata.json_store import LocalMetadata
+from beacon.metadata.local_store import LocalMetadata
 from beacon.worker import Worker
 
 # Ensure py plugin is registered

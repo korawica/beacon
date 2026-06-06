@@ -39,9 +39,9 @@ def test_get_missing_does_not_race_toctou(tmp_path):
 
 def test_lru_cache_eviction(tmp_path, monkeypatch):
     """When cache exceeds _CACHE_SIZE, oldest entry is dropped (LRU)."""
-    from beacon.metadata import json_store
+    from beacon.metadata import local_store
 
-    monkeypatch.setattr(json_store, "_CACHE_SIZE", 3)
+    monkeypatch.setattr(local_store, "_CACHE_SIZE", 3)
     meta = LocalMetadata(tmp_path)
 
     async def run():

@@ -74,7 +74,7 @@ class Dag(BaseModel):
             auto-resolved. Explicit ``variables=`` always wins.
         """
         from ..plan import plan as _plan
-        from ..metadata.json_store import LocalMetadata
+        from ..metadata.local_store import LocalMetadata
         from ..runner import DagRunner
 
         # Auto-resolve scoped variables if available and not overridden.
@@ -164,7 +164,7 @@ class Dag(BaseModel):
             dag.clear(run_id="run-abc", task_id="task2",
                       downstream=True, metadata_path="./meta")  # fix + rerun
         """
-        from ..metadata.json_store import LocalMetadata
+        from ..metadata.local_store import LocalMetadata
         from ..runner import DagRunner
 
         meta = LocalMetadata(metadata_path)
@@ -236,7 +236,7 @@ class Dag(BaseModel):
                      metadata_path="./meta")
         """
         from ..core.state import TaskState
-        from ..metadata.json_store import LocalMetadata
+        from ..metadata.local_store import LocalMetadata
         from ..runner import DagRunner
 
         valid_states = {"failed", "success", "skipped"}
@@ -324,7 +324,7 @@ class Dag(BaseModel):
         from croniter import croniter
 
         from ..core.graph import build_graph
-        from ..metadata.json_store import LocalMetadata
+        from ..metadata.local_store import LocalMetadata
         from ..runner import DagRunner
 
         if end_date < start_date:
@@ -461,19 +461,5 @@ class Dag(BaseModel):
             logical_date=logical_date,
             data_interval_start=data_interval_start,
             data_interval_end=data_interval_end,
-            cron=cron,
-        )
-
-    def dryrun(
-        self,
-        *,
-        variables: dict[str, Any] | None = None,
-        logical_date: datetime | None = None,
-        cron: str | None = None,
-    ):
-        """Deprecated — use ``dag.plan()`` instead."""
-        return self.plan(
-            variables=variables,
-            logical_date=logical_date,
             cron=cron,
         )

@@ -21,7 +21,7 @@ from beacon.core import BasePlugin, Context
 from beacon.core.state import TaskState
 from beacon.core.task_context import AttemptStatus, TaskContext
 from beacon.errors import TaskFailed, TaskSkipped
-from beacon.metadata.json_store import LocalMetadata
+from beacon.metadata.local_store import LocalMetadata
 from beacon.worker import Worker
 
 

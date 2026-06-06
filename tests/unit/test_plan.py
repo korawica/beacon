@@ -303,14 +303,3 @@ class TestPlanOutput:
         result = plan(dag)
         assert isinstance(result, PlanResult)
         assert isinstance(result.planned_tasks[0], PlannedTask)
-
-    def test_backward_compat_import(self):
-        """Old beacon.dryrun.dryrun path still works."""
-        from beacon.dryrun import dryrun, DryRunResult
-
-        dag = Dag(
-            id="test", owners=["de"], actions=[Task(id="t1", uses="empty")]
-        )
-        result = dryrun(dag)
-        assert isinstance(result, DryRunResult)
-        assert result.is_valid

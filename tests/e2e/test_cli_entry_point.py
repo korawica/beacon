@@ -47,8 +47,6 @@ def test_beacon_help_exits_zero() -> None:
         "trigger",
     ):
         assert f" {cmd}" in proc.stdout, f"`beacon {cmd}` missing from --help"
-    # dryrun is a hidden deprecated alias — must NOT appear in --help.
-    assert "dryrun" not in proc.stdout, "`beacon dryrun` should be hidden"
 
 
 def test_beacon_config_show_exits_zero() -> None:
@@ -63,9 +61,3 @@ def test_beacon_unknown_command_exits_2() -> None:
     assert proc.returncode == 2, proc.stderr
     # Click writes the usage error to stderr.
     assert "No such command" in proc.stderr or "Usage:" in proc.stderr
-
-
-def test_beacon_dryrun_missing_path_exits_2() -> None:
-    proc = _run("dryrun", "/definitely/does/not/exist")
-    # Click validates path existence → UsageError → exit 2.
-    assert proc.returncode == 2, proc.stderr

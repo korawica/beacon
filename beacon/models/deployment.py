@@ -80,7 +80,19 @@ class Deployment(BaseModel):
     )
     catch_up: bool = Field(
         default=False,
-        description="If true, schedule missed runs after a downtime",
+        description=(
+            "If true, schedule all missed runs since start_date when the "
+            "scheduler starts (or deployment is created). If false (default), "
+            "only the most recent cron tick is scheduled."
+        ),
+    )
+    max_active_runs: int | None = Field(
+        default=None,
+        description=(
+            "Maximum number of concurrent runs for this deployment. "
+            "None = unlimited. When catch_up=True, limits how many "
+            "backfill runs can be in-flight at once."
+        ),
     )
 
     # --- Runtime configuration ---

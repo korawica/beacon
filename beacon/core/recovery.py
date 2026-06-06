@@ -46,7 +46,7 @@ from .state import TaskState, TERMINAL_STATES
 
 if TYPE_CHECKING:
     from ..models.dag import Dag
-    from ..metadata.json_store import LocalMetadata
+    from ..metadata.local_store import LocalMetadata
 
 logger = logging.getLogger("beacon.recovery")
 

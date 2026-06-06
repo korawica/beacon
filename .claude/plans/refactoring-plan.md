@@ -213,7 +213,7 @@ beacon/
 │   └── variables.py         # Variable scope (unchanged)
 ├── metadata/
 │   ├── __init__.py
-│   └── json_store.py        # LocalMetadata (unchanged)
+│   └── local_store.py        # LocalMetadata (unchanged)
 ├── models/
 │   ├── __init__.py
 │   ├── branch.py            # Branch action (unchanged)

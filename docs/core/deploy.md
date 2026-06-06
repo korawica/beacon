@@ -253,8 +253,8 @@ Deployment.
 beacon plan \
   --dag-id extract-load-table \
   --timezone Asia/Bangkok \
-  --param source_system=postgres \
-  --param target_table=customers \
+  --var source_system=postgres \
+  --var target_table=customers \
   --var alert_path=/var/beacon/alerts/orders-oncall
 ```
 
@@ -274,8 +274,8 @@ beacon deploy \
     --dag-id extract-load-table \
     --cron "0 2 * * *" \
     --timezone Asia/Bangkok \
-    --param source_system=postgres \
-    --param target_table=customers \
+    --var source_system=postgres \
+    --var target_table=customers \
     --owner data-platform
 
 # A second Deployment can reuse the same DAG with different params,
@@ -285,8 +285,8 @@ beacon deploy \
     --dag-id extract-load-table \
     --cron "0 * * * *" \
     --timezone Asia/Bangkok \
-    --param source_system=mysql \
-    --param target_table=orders \
+    --var source_system=mysql \
+    --var target_table=orders \
     --var alert_path=/var/beacon/alerts/orders-oncall
 
 # Inspect.
@@ -294,7 +294,8 @@ beacon list deployments
 
 # Manually trigger a run (with optional one-off param override).
 beacon trigger daily-customers-from-postgres
-beacon trigger daily-customers-from-postgres --param target_table=customers_backfill
+beacon trigger daily-customers-from-postgres \
+  --var target_table=customers_backfill
 ```
 
 Re-running `beacon deploy --id X ...` with the same id **updates** the
@@ -351,11 +352,12 @@ export BEACON_METADATA_PATH=/srv/beacon-prod/metadata
 
 beacon deploy --id daily-customers-from-postgres --dag-id extract-load-table \
     --cron "0 2 * * *" \
-    --param source_system=postgres --param target_table=customers
+    --var source_system=postgres --var target_table=customers
 
 beacon deploy --id hourly-orders-from-mysql --dag-id extract-load-table \
     --cron "0 * * * *" \
-    --param source_system=mysql --param target_table=orders \
+    --var source_system=mysql \
+    --var target_table=orders \
     --var alert_path=/var/beacon/alerts/orders-oncall
 ```
 

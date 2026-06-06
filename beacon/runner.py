@@ -40,7 +40,7 @@ from .core.renderer import Renderer
 from .core.state import TERMINAL_STATES, TaskState
 from .core.task_context import TaskContext
 from .core.trigger_rule import TriggerRule, evaluate_trigger_rule
-from .metadata.json_store import LocalMetadata
+from .metadata.local_store import LocalMetadata
 from .worker import Worker
 
 if TYPE_CHECKING:
