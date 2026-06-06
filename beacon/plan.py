@@ -125,7 +125,7 @@ def plan(
     Checks:
       1. All plugins exist in registry
       2. DAG graph is acyclic (no cycles)
-      3. All upstream and teardown references exist
+      3. All upstream and teardown references to exist
       4. Jinja template rendering with provided params / variables / dates
 
     Args:
@@ -166,18 +166,44 @@ def plan(
     effective_params: dict[str, Any] = {p.name: p.default for p in dag.params}
     effective_params.update(params)
 
-    # Build task map
+    from .core.remote_plugin import is_remote_ref, ref_to_plugin_name
+
+    # Build task map — also detect duplicate IDs.
     task_map: dict[str, Any] = {}
-    _flatten_actions(dag.actions, task_map)
+    duplicate_ids = _flatten_actions(dag.actions, task_map)
+
+    # --- Check 0: Duplicate task IDs ---
+    for dup_id in sorted(duplicate_ids):
+        result.errors.append(
+            PlanIssue(
+                task_id=dup_id,
+                category="graph",
+                message=(
+                    f"Duplicate task ID {dup_id!r}. Every task ID must be unique "
+                    f"within the DAG (including inside groups)."
+                ),
+            )
+        )
 
     # --- Check 1: Plugin existence ---
     for task_id, action in task_map.items():
-        if isinstance(action.uses, str) and action.uses not in PLUGINS_REGISTRY:
+        if not isinstance(action.uses, str):
+            continue
+        ref = action.uses
+        if is_remote_ref(ref):
+            # Remote plugin — installed at runtime via uv. Not an error.
+            result.warnings.append(
+                f"[{task_id}] Remote plugin {ref!r} will be installed "
+                f"via 'uv pip install' before this task runs."
+            )
+        elif ref_to_plugin_name(ref) in PLUGINS_REGISTRY:
+            pass  # plain name that happens to match lookup key — fine
+        elif ref not in PLUGINS_REGISTRY:
             result.errors.append(
                 PlanIssue(
                     task_id=task_id,
                     category="plugin",
-                    message=f"Plugin {action.uses!r} not found in registry.",
+                    message=f"Plugin {ref!r} not found in registry.",
                 )
             )
 
@@ -263,13 +289,28 @@ def plan(
     return result
 
 
-def _flatten_actions(actions: list, task_map: dict[str, Any]) -> None:
-    """Flatten nested groups into a flat task map."""
+def _flatten_actions(
+    actions: list,
+    task_map: dict[str, Any],
+    _seen: set[str] | None = None,
+) -> list[str]:
+    """Flatten nested groups into a flat task map.
+
+    Returns a deduplicated list of task IDs that appear more than once.
+    """
+    if _seen is None:
+        _seen = set()
+    duplicates: set[str] = set()
     for action in actions:
         if hasattr(action, "actions") and action.actions:
-            _flatten_actions(action.actions, task_map)
+            child_dups = _flatten_actions(action.actions, task_map, _seen)
+            duplicates.update(child_dups)
         else:
+            if action.id in _seen:
+                duplicates.add(action.id)
+            _seen.add(action.id)
             task_map[action.id] = action
+    return sorted(duplicates)
 
 
 def _detect_cycle(task_map: dict[str, Any]) -> list[str] | None:

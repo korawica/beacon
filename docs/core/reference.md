@@ -154,7 +154,7 @@ A `Deployment` carries:
 
 | Method                           | Purpose                              | When to use               |
 |----------------------------------|--------------------------------------|---------------------------|
-| `dag.plan()`                    | Validate graph + templates           | Before deploy / in CI     |
+| `dag.plan()`                     | Validate graph + templates           | Before deploy / in CI     |
 | `dag.run()`                      | Execute once, persist state          | Manual trigger            |
 | `dag.test()`                     | Execute in tempdir, report pass/fail | Development               |
 | `dag.clear(task_id=...)`         | Reset task + downstream → rerun      | Fix bug, rerun            |

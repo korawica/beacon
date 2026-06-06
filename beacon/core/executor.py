@@ -55,12 +55,32 @@ class BaseExecutor(ABC):
         raise NotImplementedError
 
     def _resolve_plugin(self, plugin_name: str) -> type[BasePlugin]:
-        """Resolve plugin class from registry."""
-        if plugin_name not in PLUGINS_REGISTRY:
+        """Resolve plugin class from registry.
+
+        For remote refs (``org/repo@version`` / ``package@version``),
+        checks the registry under the version-stripped key
+        (``org/repo`` / ``package``) after :func:`install_and_register` has
+        been called from :meth:`run_task`.
+        """
+        if plugin_name in PLUGINS_REGISTRY:
+            return PLUGINS_REGISTRY[plugin_name]
+
+        # Check version-stripped registry key for remote refs.
+        from ..core.remote_plugin import is_remote_ref, ref_to_plugin_name
+
+        if is_remote_ref(plugin_name):
+            lookup = ref_to_plugin_name(plugin_name)
+            if lookup in PLUGINS_REGISTRY:
+                return PLUGINS_REGISTRY[lookup]
             raise NotImplementedError(
-                f"Plugin {plugin_name!r} not found in registry."
+                f"Remote plugin {plugin_name!r} was installed but no plugin "
+                f"named {lookup!r} is registered. Check the package's "
+                f'[project.entry-points."beacon.plugins"] declaration.'
             )
-        return PLUGINS_REGISTRY[plugin_name]
+
+        raise NotImplementedError(
+            f"Plugin {plugin_name!r} not found in registry."
+        )
 
 
 class LocalExecutor(BaseExecutor):
@@ -117,6 +137,14 @@ class LocalExecutor(BaseExecutor):
         )
 
         try:
+            # Install remote plugins (org/repo@version) before registry lookup.
+            from ..core.remote_plugin import is_remote_ref, install_and_register
+
+            if is_remote_ref(task_ctx.plugin_name):
+                await asyncio.to_thread(
+                    install_and_register, task_ctx.plugin_name
+                )
+
             plugin_cls = self._resolve_plugin(task_ctx.plugin_name)
             plugin_instance = plugin_cls.model_validate(task_ctx.inputs)
 

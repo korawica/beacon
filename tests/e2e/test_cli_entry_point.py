@@ -37,9 +37,9 @@ def test_beacon_help_exits_zero() -> None:
         "config",
         "deploy",
         "deployment",
-        "dryrun",
         "list",
         "logs",
+        "plan",
         "run",
         "scheduler",
         "sync",
@@ -47,6 +47,8 @@ def test_beacon_help_exits_zero() -> None:
         "trigger",
     ):
         assert f" {cmd}" in proc.stdout, f"`beacon {cmd}` missing from --help"
+    # dryrun is a hidden deprecated alias — must NOT appear in --help.
+    assert "dryrun" not in proc.stdout, "`beacon dryrun` should be hidden"
 
 
 def test_beacon_config_show_exits_zero() -> None:
