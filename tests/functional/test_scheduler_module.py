@@ -214,19 +214,28 @@ def test_bad_cron_logs_and_does_not_crash(tmp_path: Path) -> None:
 
 
 def test_in_flight_deployment_skips_overlapping_tick(tmp_path: Path) -> None:
-    """If a deployment's previous run hasn't finished, a same-tick fire
-    is dropped (no queue). We simulate by pre-marking _in_flight."""
+    """If a deployment's max_active_runs limit is reached, new triggers are dropped.
+
+    We simulate by setting max_active_runs=1 and pre-marking _active_runs.
+    """
     bundle = _write_bundle(tmp_path)
     meta = LocalMetadata(tmp_path / "m")
 
     async def go() -> None:
-        await meta.upsert_deployment({"id": "d1", "dag_id": "hello"})
+        await meta.upsert_deployment(
+            {
+                "id": "d1",
+                "dag_id": "hello",
+                "max_active_runs": 1,  # Limit to 1 concurrent run
+            }
+        )
         await meta.enqueue_trigger("d1")
         sched = DeploymentScheduler(bundle, meta)
         sched.reload()
-        sched._in_flight.add("d1")  # simulate prior run still going
+        # Simulate prior run still going by adding to _active_runs
+        sched._active_runs.setdefault("d1", set()).add("fake-run-id")
         await sched._tick()
-        # No real run kicked off because _in_flight had "d1".
+        # No real run kicked off because max_active_runs reached.
         assert sched._tasks == set()
 
     asyncio.run(go())

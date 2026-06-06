@@ -17,6 +17,7 @@ failure, never use exit codes ≥ 3.
 import click
 
 from .commands import (
+    api_cmd,
     config_cmd,
     deploy_cmd,
     deployment_cmd,
@@ -45,6 +46,7 @@ cli.add_command(deployment_cmd.deployment_cmd)
 cli.add_command(sync_cmd.sync)
 cli.add_command(trigger_cmd.trigger)
 cli.add_command(scheduler_cmd.scheduler)
+cli.add_command(api_cmd.api)
 cli.add_command(logs_cmd.logs)
 cli.add_command(list_cmd.list_cmd)
 cli.add_command(config_cmd.config)

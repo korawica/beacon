@@ -262,6 +262,84 @@ class MetadataProtocol(Protocol):
         ...
 
     # =========================================================================
+    # Coordination (Multi-Instance Support)
+    # =========================================================================
+
+    async def try_create_scheduled_run(
+        self,
+        run_id: str,
+        dag_id: str,
+        dag_version: str,
+        logical_date: datetime,
+        deployment_id: str,
+        state: str = "running",
+        variables: dict[str, Any] | None = None,
+    ) -> tuple[bool, str]:
+        """Atomically create a scheduled DagRun only if not already exists.
+
+        This is the coordination primitive for multi-instance schedulers.
+        Only one instance will succeed in creating the run for a given
+        (dag_id, logical_date) combination.
+
+        Args:
+            run_id: Proposed run identifier
+            dag_id: DAG identifier
+            dag_version: DAG bundle version at trigger time
+            logical_date: Schedule logical date (used for deduplication)
+            deployment_id: Deployment that triggered this run
+            state: Initial state (default: "running")
+            variables: Resolved variables for this run
+
+        Returns:
+            Tuple of (created, run_id):
+            - created=True if this instance won the race
+            - created=False if another instance already created the run
+            - run_id is the actual run_id (may differ if another instance won)
+        """
+        ...
+
+    async def try_claim_trigger(
+        self,
+        trigger_id: str,
+        deployment_id: str,
+        instance_id: str,
+    ) -> bool:
+        """Atomically claim a trigger for processing.
+
+        Prevents multiple scheduler instances from processing the same trigger.
+
+        Args:
+            trigger_id: The trigger to claim
+            deployment_id: Deployment the trigger belongs to
+            instance_id: Unique identifier of the claiming instance
+
+        Returns:
+            True if claim succeeded, False if already claimed by another instance
+        """
+        ...
+
+    async def try_update_scheduler_state(
+        self,
+        deployment_id: str,
+        last_scheduled_at: datetime,
+    ) -> bool:
+        """Atomically update last_scheduled_at if newer than current value.
+
+        This is used to coordinate which scheduler instance "owns" the next
+        scheduled tick for a deployment. The instance that successfully updates
+        the state gets to fire the run.
+
+        Args:
+            deployment_id: Deployment to update
+            last_scheduled_at: The new last_scheduled_at value
+
+        Returns:
+            True if update succeeded (this instance won the tick),
+            False if another instance already updated to an equal or later time
+        """
+        ...
+
+    # =========================================================================
     # Cache Management
     # =========================================================================
 

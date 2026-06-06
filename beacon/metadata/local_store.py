@@ -42,6 +42,18 @@ class LocalMetadata(BaseMetadata):
 
     For multi-node production, use SqliteMetadata (Phase 2) or
     PostgresMetadata (Phase 3).
+
+    Coordination (Multi-Instance Support)
+    -------------------------------------
+    This class supports coordination between multiple scheduler instances
+    using file-based locks. The coordination primitives are:
+
+    - `try_create_scheduled_run`: Create a run only if not already exists
+    - `try_claim_trigger`: Claim a trigger for processing
+    - `try_update_scheduler_state`: Update scheduler state atomically
+
+    Lock files are stored in `{base_path}/.locks/` and use `fcntl.flock`
+    for atomic cross-process locking on Unix systems.
     """
 
     def __init__(self, base_path: str | Path = "./metadata.db") -> None:
@@ -52,12 +64,14 @@ class LocalMetadata(BaseMetadata):
         self._task_states_dir = self.base_path / "task_states"
         self._deployments_dir = self.base_path / "deployments"
         self._triggers_dir = self.base_path / "triggers"
+        self._locks_dir = self.base_path / ".locks"
         for d in (
             self._dag_runs_dir,
             self._task_contexts_dir,
             self._task_states_dir,
             self._deployments_dir,
             self._triggers_dir,
+            self._locks_dir,
         ):
             d.mkdir(parents=True, exist_ok=True)
 
@@ -479,6 +493,324 @@ class LocalMetadata(BaseMetadata):
         datas = await asyncio.gather(*(_async_read(f) for f in files))
         return [d for d in datas if d]
 
+    # =========================================================================
+    # Coordination (Multi-Instance Support)
+    # =========================================================================
+
+    async def try_create_scheduled_run(
+        self,
+        run_id: str,
+        dag_id: str,
+        dag_version: str,
+        logical_date: datetime,
+        deployment_id: str,
+        state: str = "running",
+        variables: dict[str, Any] | None = None,
+    ) -> tuple[bool, str]:
+        """Atomically create a scheduled DagRun only if not already exists.
+
+        Uses file-based locking to coordinate between multiple scheduler
+        instances. Only one instance will succeed in creating the run.
+
+        The deduplication key is (dag_id, logical_date) for scheduled runs.
+        Manual runs (no logical_date) are not deduplicated.
+
+        Returns:
+            Tuple of (created, run_id):
+            - created=True if this instance won the race
+            - created=False if another instance already created the run
+        """
+        # For scheduled runs, use logical_date as the dedup key
+        lock_key = f"{dag_id}_{logical_date.strftime('%Y%m%dT%H%M%S')}"
+
+        result = await asyncio.to_thread(
+            self._try_create_scheduled_run_sync,
+            run_id,
+            dag_id,
+            dag_version,
+            logical_date,
+            deployment_id,
+            state,
+            variables,
+            lock_key,
+        )
+        return result
+
+    def _try_create_scheduled_run_sync(
+        self,
+        run_id: str,
+        dag_id: str,
+        dag_version: str,
+        logical_date: datetime,
+        deployment_id: str,
+        state: str,
+        variables: dict[str, Any] | None,
+        lock_key: str,
+    ) -> tuple[bool, str]:
+        """Synchronous implementation of try_create_scheduled_run."""
+        import fcntl
+
+        lock_path = self._locks_dir / f"scheduled_{lock_key}.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            # Try to acquire exclusive lock (non-blocking)
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+                # Check if run already exists for this logical_date
+                existing = self._find_run_by_logical_date_sync(
+                    dag_id, logical_date
+                )
+                if existing:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                    os.close(fd)
+                    return (False, existing["run_id"])
+
+                # Create the run
+                data = {
+                    "run_id": run_id,
+                    "dag_id": dag_id,
+                    "dag_version": dag_version,
+                    "state": state,
+                    "logical_date": str(logical_date),
+                    "deployment_id": deployment_id,
+                    "variables": variables or {},
+                    "created_at": str(datetime.now()),
+                    "ended_at": None,
+                }
+                path = self._dag_run_path(dag_id, run_id)
+                _sync_write(path, data)
+                self._active_runs.setdefault(dag_id, set()).add(run_id)
+
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                os.close(fd)
+                return (True, run_id)
+            except BlockingIOError:
+                # Another instance has the lock - wait and check
+                os.close(fd)
+                # Wait a bit for the other instance to finish
+                import time
+
+                time.sleep(0.1)
+                existing = self._find_run_by_logical_date_sync(
+                    dag_id, logical_date
+                )
+                if existing:
+                    return (False, existing["run_id"])
+                # Lock was released but no run created - retry would be complex
+                # Just return False to let the next tick try again
+                return (False, "")
+        except OSError:
+            # Lock acquisition failed
+            return (False, "")
+
+    def _find_run_by_logical_date_sync(
+        self, dag_id: str, logical_date: datetime
+    ) -> dict[str, Any] | None:
+        """Find an existing run by dag_id and logical_date (sync version)."""
+        dag_dir = self._dag_runs_dir / f"dag_id={dag_id}"
+        if not dag_dir.exists():
+            return None
+
+        logical_date_str = logical_date.strftime("%Y%m%dT%H%M%S")
+        expected_run_prefix = f"scheduled-{dag_id}-{logical_date_str}"
+
+        for run_file in dag_dir.glob("*.json"):
+            if run_file.stem == expected_run_prefix:
+                data = _sync_read(run_file)
+                if data:
+                    return data
+
+        return None
+
+    async def try_claim_trigger(
+        self,
+        trigger_id: str,
+        deployment_id: str,
+        instance_id: str,
+    ) -> bool:
+        """Atomically claim a trigger for processing.
+
+        Updates the trigger file with a `claimed_by` field. Only one
+        instance can claim a trigger.
+
+        Returns:
+            True if claim succeeded, False if already claimed
+        """
+        return await asyncio.to_thread(
+            self._try_claim_trigger_sync,
+            trigger_id,
+            deployment_id,
+            instance_id,
+        )
+
+    def _try_claim_trigger_sync(
+        self, trigger_id: str, deployment_id: str, instance_id: str
+    ) -> bool:
+        """Synchronous implementation of try_claim_trigger."""
+        import fcntl
+
+        trigger_path = self._trigger_path(deployment_id, trigger_id)
+        if not trigger_path.exists():
+            return False
+
+        lock_path = self._locks_dir / f"trigger_{trigger_id}.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+                # Read trigger
+                data = _sync_read(trigger_path)
+                if not data:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                    os.close(fd)
+                    return False
+
+                # Check if already claimed
+                if data.get("claimed_by"):
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                    os.close(fd)
+                    return False
+
+                # Claim it
+                data["claimed_by"] = instance_id
+                data["claimed_at"] = datetime.now().isoformat()
+                _sync_write(trigger_path, data)
+
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                os.close(fd)
+                return True
+            except BlockingIOError:
+                os.close(fd)
+                return False
+        except OSError:
+            return False
+
+    async def try_update_scheduler_state(
+        self,
+        deployment_id: str,
+        last_scheduled_at: datetime,
+    ) -> bool:
+        """Atomically update last_scheduled_at if newer than current value.
+
+        Uses file-based locking to ensure only one instance updates the
+        scheduler state for a deployment at a time.
+
+        Returns:
+            True if update succeeded, False if another instance already
+            updated to an equal or later time
+        """
+        return await asyncio.to_thread(
+            self._try_update_scheduler_state_sync,
+            deployment_id,
+            last_scheduled_at,
+        )
+
+    def _try_update_scheduler_state_sync(
+        self, deployment_id: str, last_scheduled_at: datetime
+    ) -> bool:
+        """Synchronous implementation of try_update_scheduler_state."""
+        import fcntl
+
+        lock_path = self._locks_dir / f"deployment_{deployment_id}.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+                # Read deployment
+                dep_path = self._deployment_path(deployment_id)
+                data = _sync_read(dep_path)
+                if not data:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                    os.close(fd)
+                    return False
+
+                # Check current last_scheduled_at
+                scheduler = data.setdefault("_scheduler", {})
+                current_str = scheduler.get("last_scheduled_at")
+                if current_str:
+                    try:
+                        current = datetime.fromisoformat(current_str)
+                        if current >= last_scheduled_at:
+                            # Another instance already scheduled this or later
+                            fcntl.flock(fd, fcntl.LOCK_UN)
+                            os.close(fd)
+                            return False
+                    except ValueError:
+                        pass  # Invalid format, proceed with update
+
+                # Update
+                scheduler["last_scheduled_at"] = last_scheduled_at.isoformat()
+                _sync_write(dep_path, data)
+
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                os.close(fd)
+                return True
+            except BlockingIOError:
+                os.close(fd)
+                return False
+        except OSError:
+            return False
+
+    async def drain_triggers_with_claim(
+        self, instance_id: str, deployment_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Drain triggers that have been claimed by this instance.
+
+        This is the coordinated version of drain_triggers. It:
+        1. Finds all pending triggers
+        2. Tries to claim each one
+        3. Returns only triggers claimed by this instance
+
+        Args:
+            instance_id: Unique identifier for this scheduler instance
+            deployment_id: Filter by deployment, or None for all
+
+        Returns:
+            List of trigger dicts claimed by this instance
+        """
+        if deployment_id is not None:
+            dirs = [self._triggers_dir / f"deployment_id={deployment_id}"]
+        else:
+            dirs = [d for d in self._triggers_dir.iterdir() if d.is_dir()]
+
+        out: list[dict[str, Any]] = []
+        for d in dirs:
+            if not d.exists():
+                continue
+            for f in sorted(d.glob("*.json")):
+                data = await _async_read(f)
+                if not data:
+                    continue
+
+                trigger_id = data.get("trigger_id")
+                dep_id = data.get("deployment_id")
+
+                if not trigger_id or not dep_id:
+                    continue
+
+                # Try to claim this trigger
+                claimed = await self.try_claim_trigger(
+                    trigger_id, dep_id, instance_id
+                )
+                if claimed:
+                    out.append(data)
+                    # Delete the trigger file
+                    try:
+                        f.unlink()
+                    except FileNotFoundError:
+                        pass
+
+        return out
+
 
 # --- Async I/O helpers ---
 
@@ -533,3 +865,30 @@ async def _async_read(path: Path) -> dict[str, Any] | None:
             return None
 
     return await asyncio.to_thread(_do_read)
+
+
+# --- Sync I/O helpers (for use within locked sections) ---
+
+
+def _sync_write(path: Path, data: Any) -> None:
+    """Synchronous atomic JSON write via temp file + rename."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f, default=str)
+        os.replace(tmp_path, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def _sync_read(path: Path) -> dict[str, Any] | None:
+    """Synchronous file read. Returns None if file doesn't exist."""
+    try:
+        return json.loads(path.read_text())
+    except FileNotFoundError:
+        return None

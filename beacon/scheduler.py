@@ -11,6 +11,20 @@ The scheduler shares its metadata store with the CLI — that's the IPC
 layer (see ``LocalMetadata.enqueue_trigger`` /
 ``drain_triggers``). No socket, no API.
 
+Multi-Instance Support
+----------------------
+The scheduler supports running multiple instances for horizontal scaling.
+Coordination is handled via the metadata store:
+
+* **Scheduled runs**: Only one instance will fire a run for a given
+  (deployment_id, logical_date) combination via `try_update_scheduler_state`.
+* **Manual triggers**: Triggers are claimed atomically via
+  `drain_triggers_with_claim`.
+
+This allows multiple scheduler instances to run concurrently without
+duplicate runs. Works with LocalMetadata (file locks) and extends
+naturally to SqliteMetadata/PostgresMetadata (UNIQUE constraints).
+
 Semantics
 ---------
 * **Catch-up scheduling.** When ``Deployment.catch_up=True`` and a
@@ -91,18 +105,23 @@ def _parse_iso(value: Any) -> datetime | None:
 
 
 class DeploymentScheduler:
-    """Cron + manual-trigger loop sharing LocalMetadata with the CLI."""
+    """Cron + manual-trigger loop sharing LocalMetadata with the CLI.
+
+    Supports multi-instance coordination via the metadata store.
+    """
 
     def __init__(
         self,
         bundle_path: str | Path,
         meta: LocalMetadata,
         *,
+        instance_id: str | None = None,
         tick_seconds: int = 5,
         max_concurrent_runs: int = 8,
     ) -> None:
         self.bundle_path = Path(bundle_path).resolve()
         self.meta = meta
+        self.instance_id = instance_id or f"inst-{uuid.uuid4().hex[:8]}"
         self.tick_seconds = tick_seconds
         self._sem = asyncio.Semaphore(max_concurrent_runs)
         self._stop = asyncio.Event()
@@ -150,9 +169,10 @@ class DeploymentScheduler:
         await self._recover_on_startup()
 
         logger.info(
-            "scheduler started: bundle=%s tick=%ss",
+            "scheduler started: bundle=%s tick=%ss instance=%s",
             self.bundle_path,
             self.tick_seconds,
+            self.instance_id,
         )
         try:
             while not self._stop.is_set():
@@ -237,8 +257,16 @@ class DeploymentScheduler:
     async def _tick(self) -> None:
         now = datetime.now()
 
-        # 1. Drain pending manual triggers.
-        for t in await self.meta.drain_triggers():
+        # 1. Drain pending manual triggers (with coordination for multi-instance).
+        # Use drain_triggers_with_claim if available (multi-instance safe).
+        if hasattr(self.meta, "drain_triggers_with_claim"):
+            triggers = await self.meta.drain_triggers_with_claim(
+                instance_id=self.instance_id
+            )
+        else:
+            triggers = await self.meta.drain_triggers()
+
+        for t in triggers:
             await self._fire(
                 deployment_id=t["deployment_id"],
                 override_variables=t.get("variables") or {},
@@ -389,7 +417,11 @@ class DeploymentScheduler:
         end: datetime | None,
         now: datetime,
     ) -> None:
-        """Schedule a single run for the most recent cron tick (no catch-up)."""
+        """Schedule a single run for the most recent cron tick (no catch-up).
+
+        Uses coordination to ensure only one scheduler instance fires
+        the run for a given (deployment_id, logical_date) combination.
+        """
         dep_id = dep["id"]
 
         # The most recent cron tick at-or-before ``now``.
@@ -405,14 +437,32 @@ class DeploymentScheduler:
         if last is not None and due <= last:
             return
 
+        # COORDINATION: Try to claim this scheduled tick atomically.
+        # Only one scheduler instance will succeed.
+        if hasattr(self.meta, "try_update_scheduler_state"):
+            claimed = await self.meta.try_update_scheduler_state(
+                dep_id,
+                last_scheduled_at=due,
+            )
+            if not claimed:
+                logger.debug(
+                    "Skip %s: another instance already scheduled tick at %s",
+                    dep_id,
+                    due.isoformat(),
+                )
+                return
+        else:
+            # Fallback: non-coordinated update (single instance mode)
+            await self.meta.update_deployment_scheduler_state(
+                dep_id, last_scheduled_at=due
+            )
+
+        # We won the race - fire the run
         await self._fire(
             deployment_id=dep_id,
             override_variables={},
             logical_date=due,
             trigger="scheduled",
-        )
-        await self.meta.update_deployment_scheduler_state(
-            dep_id, last_scheduled_at=due
         )
 
     # --- run fan-out -------------------------------------------------------
@@ -426,6 +476,9 @@ class DeploymentScheduler:
         trigger: str,
     ) -> str | None:
         """Fire a DagRun for a deployment.
+
+        Uses coordination for scheduled runs to prevent duplicates across
+        multiple scheduler instances.
 
         Returns:
             run_id if fired, None if skipped (e.g., already in-flight)
@@ -491,6 +544,37 @@ class DeploymentScheduler:
             )
         else:
             run_id = f"manual-{dag.id}-{uuid.uuid4().hex[:8]}"
+
+        # COORDINATION: For scheduled runs, use try_create_scheduled_run
+        # to prevent duplicate runs across multiple instances.
+        if trigger == "scheduled" and hasattr(
+            self.meta, "try_create_scheduled_run"
+        ):
+            created, actual_run_id = await self.meta.try_create_scheduled_run(
+                run_id=run_id,
+                dag_id=dag.id,
+                dag_version="",  # TODO: track DAG versions
+                logical_date=logical_date,
+                deployment_id=deployment_id,
+                variables=variables,
+            )
+            if not created:
+                logger.debug(
+                    "Skip %s: run already created by another instance (run_id=%s)",
+                    deployment_id,
+                    actual_run_id,
+                )
+                return actual_run_id
+            run_id = actual_run_id
+        else:
+            # Manual triggers or non-coordinated mode: create run directly
+            await self.meta.create_dag_run(
+                run_id=run_id,
+                dag_id=dag.id,
+                dag_version="",  # TODO: track DAG versions
+                logical_date=logical_date,
+                variables=variables,
+            )
 
         # Track active run
         self._active_runs.setdefault(deployment_id, set()).add(run_id)

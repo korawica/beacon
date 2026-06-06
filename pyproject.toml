@@ -13,11 +13,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+api = ["fastapi>=0.109.0", "uvicorn>=0.27.0"]
 gcs = ["google-cloud-storage>=2.18.0"]
 elasticsearch = ["elasticsearch>=8.14.0"]
 
 [project.scripts]
 beacon = "beacon.cli:cli"
+beacon-api = "beacon.api.server:main"
 
 [build-system]
 requires = ["hatchling"]
