@@ -140,6 +140,10 @@ class DeploymentScheduler:
         """Tick forever until SIGTERM/SIGINT. Drains in-flight runs on exit."""
         self.reload()
         self._install_signal_handlers()
+
+        # Crash recovery: find and resume orphaned runs
+        await self._recover_on_startup()
+
         logger.info(
             "scheduler started: bundle=%s tick=%ss",
             self.bundle_path,
@@ -171,6 +175,59 @@ class DeploymentScheduler:
             if self._tasks:
                 await asyncio.gather(*self._tasks, return_exceptions=True)
             logger.info("scheduler stopped")
+
+    async def _recover_on_startup(self) -> None:
+        """Find and recover orphaned runs from a previous crash.
+
+        Detects zombie tasks (RUNNING without heartbeat) and resumes
+        active runs that were interrupted.
+        """
+        from .core.recovery import recover_active_runs
+
+        logger.info("Checking for orphaned runs to recover...")
+
+        recoverable = await recover_active_runs(
+            meta=self.meta,
+            dags=self._dags,
+            variables_scope=None,  # variables are per-run, already persisted
+        )
+
+        if not recoverable:
+            logger.info("No orphaned runs found")
+            return
+
+        logger.info("Found %d orphaned run(s) to resume", len(recoverable))
+
+        for run_info in recoverable:
+            dag_id = run_info["dag_id"]
+            run_id = run_info["run_id"]
+            dag = self._dags.get(dag_id)
+
+            if dag is None:
+                logger.warning(
+                    "Cannot resume run %s: DAG %s not in bundle", run_id, dag_id
+                )
+                continue
+
+            logger.info(
+                "Resuming orphaned run: %s/%s (%d tasks pending)",
+                dag_id,
+                run_id,
+                len(run_info["non_terminal_tasks"]),
+            )
+
+            task = asyncio.create_task(
+                self._run_one(
+                    deployment_id=None,  # not tied to a deployment
+                    dag=dag,
+                    run_id=run_id,
+                    logical_date=run_info.get("logical_date") or datetime.now(),
+                    variables=run_info.get("variables") or {},
+                    trigger="recovered",
+                )
+            )
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
 
     async def _tick(self) -> None:
         now = datetime.now()

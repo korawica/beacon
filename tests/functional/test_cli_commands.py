@@ -106,8 +106,8 @@ def test_run_persists_metadata(runner: CliRunner, tmp_path: Path) -> None:
     res = runner.invoke(cli, ["run", str(f), "--metadata-path", str(meta)])
     assert res.exit_code == 0, res.output
     assert "state  : success" in res.output
-    # Metadata dir was created and populated.
-    assert (meta / "dag_runs" / "hello").exists()
+    # Metadata dir was created and populated (hive-style partitioning).
+    assert (meta / "dag_runs" / "dag_id=hello").exists()
 
 
 # ---------- config show ---------------------------------------------------

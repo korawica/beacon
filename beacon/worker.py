@@ -56,10 +56,12 @@ class Worker:
         metadata: MetadataProtocol,
         executor: BaseExecutor | None = None,
         max_concurrent: int = 100,
+        heartbeat_interval_seconds: int = 30,
     ) -> None:
         self.metadata = metadata
         self.executor = executor or LocalExecutor()
         self.max_concurrent = max_concurrent
+        self.heartbeat_interval_seconds = heartbeat_interval_seconds
         self._queue: asyncio.Queue = asyncio.Queue()
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._running = False
@@ -139,6 +141,12 @@ class Worker:
             )
             await self._fire(msg.callbacks, "start", task_ctx)
 
+            # Start heartbeat coroutine for zombie detection
+            heartbeat_stop = asyncio.Event()
+            heartbeat_task = asyncio.create_task(
+                self._heartbeat_loop(run_id, dag_id, task_id, heartbeat_stop)
+            )
+
             # Executors are contract-bound to never raise — every error is
             # captured as a failed attempt on the returned task_ctx. This
             # ``except`` is a defense-in-depth safety net so a buggy
@@ -162,6 +170,15 @@ class Worker:
                         error=f"executor crashed: {exc}",
                     )
                 task_ctx.retries = 0
+            finally:
+                # Stop heartbeat
+                heartbeat_stop.set()
+                heartbeat_task.cancel()
+                try:
+                    await heartbeat_task
+                except asyncio.CancelledError:
+                    pass
+
             await self.metadata.put_task_context(
                 run_id, dag_id, task_id, task_ctx
             )
@@ -172,6 +189,30 @@ class Worker:
             return  # task was re-queued for retry — terminal handler runs later
 
         await self._notify_terminal(msg, task_ctx, final_state)
+
+    async def _heartbeat_loop(
+        self,
+        run_id: str,
+        dag_id: str,
+        task_id: str,
+        stop_event: asyncio.Event,
+    ) -> None:
+        """Periodically write heartbeat for RUNNING task."""
+        while not stop_event.is_set():
+            try:
+                await self.metadata.update_task_heartbeat(
+                    run_id, dag_id, task_id
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Heartbeat failed for %s/%s: %s", dag_id, task_id, exc
+                )
+            try:
+                await asyncio.wait_for(
+                    stop_event.wait(), timeout=self.heartbeat_interval_seconds
+                )
+            except TimeoutError:
+                pass  # continue loop
 
     async def _resolve_final_state(
         self, msg: _TaskMessage, task_ctx: TaskContext

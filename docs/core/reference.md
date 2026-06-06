@@ -76,13 +76,13 @@ complexity.
 │  teardown(context) → None    default no-op              │
 └──────────────────────────┬──────────────────────────────┘
                            ▼
-┌──────────────────────────────────────────────────────────┐
-│             Metadata Store (LocalMetadata)                │
-│  Sharded JSON, async I/O, LRU cache, atomic writes       │
-│    {path}/dag_runs/{dag_id}/{run_id}.json                │
-│    {path}/task_contexts/{dag_id}/{run_id}/{task_id}.json │
-│    {path}/task_states/{dag_id}/{run_id}/{task_id}.json   │
-└──────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│             Metadata Store (LocalMetadata)                             │
+│  Sharded JSON, async I/O, LRU cache, atomic writes                     │
+│    {path}/dag_runs/dag_id={dag_id}/{run_id}.json                       │
+│    {path}/task_contexts/dag_id={dag_id}/run_id={run_id}/{task_id}.json │
+│    {path}/task_states/dag_id={dag_id}/run_id={run_id}/{task_id}.json   │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Phase 2 — Production Service (planned)
@@ -1140,12 +1140,55 @@ class MetadataProtocol(Protocol):
 
 ### LocalMetadata performance
 
-- **Sharded by `dag_id`** — no flat 100k-file dirs
+- **Hive-style partitioning** — `dag_id={dag_id}/run_id={run_id}/{task_id}.json`
+- **Fast filtering** — `ls {path}/dag_runs/dag_id=my-dag/`
+- **Query engine compatible** — DuckDB, Spark, Trino can read directly
 - **Async I/O** via `asyncio.to_thread`
 - **Atomic writes** — temp file + `os.replace`
 - **In-memory cache** for task states (scheduler hot path)
 - **Bulk queries** — `get_all_task_states(run_id, dag_id)`
 - **Cache eviction** — `evict_run_from_cache()` on run completion
+
+### Crash Recovery
+
+When a scheduler/worker pod crashes, tasks in `RUNNING` state become
+orphans ("zombies"). Beacon recovers on scheduler restart:
+
+```text
+Scheduler Startup
+─────────────────
+1. List all active DagRuns (state=running)
+2. For each active run:
+   - RUNNING tasks with no heartbeat for N seconds → FAILED (zombie)
+   - QUEUED tasks stuck too long → re-queue or FAILED
+3. Resume runs with non-terminal tasks
+```
+
+**Heartbeat protocol:**
+
+Workers write `heartbeat_at` to task state files while tasks execute:
+
+```json
+{
+  "run_id": "...",
+  "dag_id": "...",
+  "task_id": "...",
+  "state": "running",
+  "heartbeat_at": "2026-06-06T10:30:45.123456",
+  "updated_at": "2026-06-06T10:30:45.123456"
+}
+```
+
+Default zombie threshold: 5 minutes without heartbeat.
+
+**Difference from Airflow:**
+
+| Aspect | Airflow Deferrable | Beacon |
+|--------|-------------------|--------|
+| Triggerer | Separate process | API Server (planned) |
+| Task state during defer | RUNNING → SCHEDULED | RUNNING with heartbeat |
+| Crash recovery | Rebuilds coroutine from DB | Resume from metadata state |
+| Zombie detection | Periodic job | On scheduler startup |
 
 ---
 
@@ -1434,26 +1477,26 @@ Not what env vars are for. Use:
 
 ## 17. Key Design Decisions
 
-| Decision                               | Rationale                                                                    |
-|----------------------------------------|------------------------------------------------------------------------------|
-| Stateless DagRunner                    | Restart without data loss; all state in metadata                             |
-| TaskContext is serializable            | Enables remote execution without DAG file mounts                             |
-| Parse once, version-tag                | Eliminates Airflow's re-parse-every-heartbeat bottleneck                     |
-| DAG vs Deployment separation           | Reuse one DAG across many schedules/params                                   |
-| Protocol-based MetadataStore           | Pluggable persistence without touching runner/worker code                    |
-| Sharded metadata (by dag_id)           | Supports 1000+ DAGs without directory-listing degradation                    |
-| Async-only execution                   | Sensors don't waste worker slots; one event loop handles 100s of tasks       |
-| Plugin teardown in `finally`           | Resources always cleaned up — no leaks on failure/timeout                    |
-| Two-pass Jinja rendering               | Outputs resolved late (worker); everything else resolved early (runner)      |
-| NativeEnvironment + Sandbox            | Types preserved through templates AND security enforced                      |
-| `run_id` encodes trigger type          | Filter/group runs by how they were created                                   |
-| Auto-clear teardown on clear/mark      | Prevents resource leaks on re-run                                            |
-| Plugin registry (not pip install)      | Fast resolution; no runtime installation; version-pinned                     |
-| Single `BasePlugin` for all types      | Any plugin works with any action — no artificial restriction per action type |
-| Raise strategy (`TaskFailed` / `TaskSkipped` / `TaskRetry`) | Plugins express control flow via exceptions, not return-value contracts |
-| `action.extract_outputs` normalization | Action owns routing logic; plugin stays ignorant of DAG topology             |
-| Bounded upstream outputs               | Prevents unbounded XCom-style data growth                                    |
-| DAG version pinning per run            | Mid-run DAG edits don't corrupt active instances                             |
+| Decision                                                    | Rationale                                                                    |
+|-------------------------------------------------------------|------------------------------------------------------------------------------|
+| Stateless DagRunner                                         | Restart without data loss; all state in metadata                             |
+| TaskContext is serializable                                 | Enables remote execution without DAG file mounts                             |
+| Parse once, version-tag                                     | Eliminates Airflow's re-parse-every-heartbeat bottleneck                     |
+| DAG vs Deployment separation                                | Reuse one DAG across many schedules/params                                   |
+| Protocol-based MetadataStore                                | Pluggable persistence without touching runner/worker code                    |
+| Sharded metadata (by dag_id)                                | Supports 1000+ DAGs without directory-listing degradation                    |
+| Async-only execution                                        | Sensors don't waste worker slots; one event loop handles 100s of tasks       |
+| Plugin teardown in `finally`                                | Resources always cleaned up — no leaks on failure/timeout                    |
+| Two-pass Jinja rendering                                    | Outputs resolved late (worker); everything else resolved early (runner)      |
+| NativeEnvironment + Sandbox                                 | Types preserved through templates AND security enforced                      |
+| `run_id` encodes trigger type                               | Filter/group runs by how they were created                                   |
+| Auto-clear teardown on clear/mark                           | Prevents resource leaks on re-run                                            |
+| Plugin registry (not pip install)                           | Fast resolution; no runtime installation; version-pinned                     |
+| Single `BasePlugin` for all types                           | Any plugin works with any action — no artificial restriction per action type |
+| Raise strategy (`TaskFailed` / `TaskSkipped` / `TaskRetry`) | Plugins express control flow via exceptions, not return-value contracts      |
+| `action.extract_outputs` normalization                      | Action owns routing logic; plugin stays ignorant of DAG topology             |
+| Bounded upstream outputs                                    | Prevents unbounded XCom-style data growth                                    |
+| DAG version pinning per run                                 | Mid-run DAG edits don't corrupt active instances                             |
 
 ---
 

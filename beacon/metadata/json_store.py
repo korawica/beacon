@@ -3,11 +3,16 @@
 Structure::
 
     {base_path}/
-    ├── dag_runs/{dag_id}/{run_id}.json
-    ├── task_contexts/{dag_id}/{run_id}/{task_id}.json
-    ├── task_states/{dag_id}/{run_id}/{task_id}.json
+    ├── dag_runs/dag_id={dag_id}/{run_id}.json
+    ├── task_contexts/dag_id={dag_id}/run_id={run_id}/{task_id}.json
+    ├── task_states/dag_id={dag_id}/run_id={run_id}/{task_id}.json
     ├── deployments/{deployment_id}.json
-    └── triggers/{deployment_id}/{trigger_id}.json   # pending manual triggers
+    └── triggers/deployment_id={deployment_id}/{trigger_id}.json
+
+Hive-style partitioning benefits:
+- Explicit partition keys: ``ls {path}/dag_runs/dag_id=my-dag/``
+- Query engine compatible (DuckDB, Spark, Trino)
+- Fast filtering: ``find . -type d -name "dag_id=etl*"``
 """
 
 import asyncio
@@ -139,7 +144,9 @@ class LocalMetadata:
         self, run_id: str, dag_id: str
     ) -> dict[str, TaskContext]:
         """Get all TaskContexts for a run (parallel reads)."""
-        run_dir = self._task_contexts_dir / dag_id / run_id
+        run_dir = (
+            self._task_contexts_dir / f"dag_id={dag_id}" / f"run_id={run_id}"
+        )
         if not run_dir.exists():
             return {}
         files = list(run_dir.glob("*.json"))
@@ -228,11 +235,44 @@ class LocalMetadata:
         self._cache_put(cache_key, state)
         return state
 
+    async def get_task_state_with_heartbeat(
+        self, run_id: str, dag_id: str, task_id: str
+    ) -> dict[str, Any] | None:
+        """Get full task state dict including heartbeat_at field.
+
+        Used by crash recovery to detect zombie tasks.
+        """
+        path = self._task_state_path(dag_id, run_id, task_id)
+        return await _async_read(path)
+
+    async def update_task_heartbeat(
+        self, run_id: str, dag_id: str, task_id: str
+    ) -> None:
+        """Update heartbeat_at timestamp for a RUNNING task.
+
+        Called periodically by the worker while a task executes.
+        Enables zombie detection on scheduler restart.
+        """
+        path = self._task_state_path(dag_id, run_id, task_id)
+        data = await _async_read(path)
+        if data is None:
+            data = {
+                "run_id": run_id,
+                "dag_id": dag_id,
+                "task_id": task_id,
+                "state": str(TaskState.RUNNING),
+            }
+        data["heartbeat_at"] = str(datetime.now())
+        data["updated_at"] = str(datetime.now())
+        await _async_write(path, data)
+
     async def get_all_task_states(
         self, run_id: str, dag_id: str
     ) -> dict[str, TaskState]:
         """Get all task states for a run (parallel reads, cache-aware)."""
-        run_dir = self._task_states_dir / dag_id / run_id
+        run_dir = (
+            self._task_states_dir / f"dag_id={dag_id}" / f"run_id={run_id}"
+        )
         if not run_dir.exists():
             return {}
 
@@ -282,24 +322,38 @@ class LocalMetadata:
         for k in keys_to_remove:
             del self._state_cache[k]
 
-    # --- Path helpers (sharded by dag_id) ---
+    # --- Path helpers (hive-style partitioning) ---
 
     def _dag_run_path(self, dag_id: str, run_id: str) -> Path:
-        return self._dag_runs_dir / dag_id / f"{run_id}.json"
+        return self._dag_runs_dir / f"dag_id={dag_id}" / f"{run_id}.json"
 
     def _task_context_path(
         self, dag_id: str, run_id: str, task_id: str
     ) -> Path:
-        return self._task_contexts_dir / dag_id / run_id / f"{task_id}.json"
+        return (
+            self._task_contexts_dir
+            / f"dag_id={dag_id}"
+            / f"run_id={run_id}"
+            / f"{task_id}.json"
+        )
 
     def _task_state_path(self, dag_id: str, run_id: str, task_id: str) -> Path:
-        return self._task_states_dir / dag_id / run_id / f"{task_id}.json"
+        return (
+            self._task_states_dir
+            / f"dag_id={dag_id}"
+            / f"run_id={run_id}"
+            / f"{task_id}.json"
+        )
 
     def _deployment_path(self, deployment_id: str) -> Path:
         return self._deployments_dir / f"{deployment_id}.json"
 
     def _trigger_path(self, deployment_id: str, trigger_id: str) -> Path:
-        return self._triggers_dir / deployment_id / f"{trigger_id}.json"
+        return (
+            self._triggers_dir
+            / f"deployment_id={deployment_id}"
+            / f"{trigger_id}.json"
+        )
 
     # --- Deployments ---
     # Stored as plain dicts (Deployment.model_dump) plus scheduler bookkeeping
@@ -382,7 +436,7 @@ class LocalMetadata:
         un-read files in place for the next tick.
         """
         if deployment_id is not None:
-            dirs = [self._triggers_dir / deployment_id]
+            dirs = [self._triggers_dir / f"deployment_id={deployment_id}"]
         else:
             dirs = [d for d in self._triggers_dir.iterdir() if d.is_dir()]
         out: list[dict[str, Any]] = []
@@ -408,7 +462,7 @@ class LocalMetadata:
     ) -> list[dict[str, Any]]:
         """List recent DAG runs (active + terminal), newest first."""
         if dag_id is not None:
-            shard_dirs = [self._dag_runs_dir / dag_id]
+            shard_dirs = [self._dag_runs_dir / f"dag_id={dag_id}"]
         else:
             shard_dirs = [d for d in self._dag_runs_dir.iterdir() if d.is_dir()]
         files: list[Path] = []
