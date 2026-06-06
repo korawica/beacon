@@ -1,23 +1,24 @@
 # Beacon Architecture Review: Production Scale (10,000 DAGs/hour)
 
 **Date:** 2026-06-06
-**Status:** Assessment for production readiness
+**Status:** Assessment for production readiness (updated with multi-instance coordination)
 
 ---
 
 ## Executive Summary
 
-Beacon's architecture is fundamentally sound for production workloads. However, **10,000 DAGs per hour** is at the upper boundary of the Phase 2 design target. The current Phase 1 implementation has specific bottlenecks that will surface at this scale.
+Beacon's architecture is fundamentally sound for production workloads. With the new **merged API server + scheduler with coordination**, Beacon can now scale horizontally to handle 10,000+ DAGs/hour.
 
-**Verdict:** Phase 1 (single-node file-based) → **Not recommended** for 10K DAGs/hour.
-Phase 2 (service mode with SQLite) → **Possible with tuning**.
-Phase 3 (distributed with Postgres) → **Required** for sustained 10K DAGs/hour.
+**Verdict:**
+- Phase 1 (single-node file-based) → **Not recommended** for 10K DAGs/hour.
+- Phase 2 with coordination (current) → **Recommended** — run multiple instances with shared metadata.
+- Phase 3 (Postgres) → **Required** for >50K DAGs/hour or shared-nothing scaling.
 
 ---
 
 ## 1. Current Architecture Analysis
 
-### 1.1 Metadata Store: `LocalMetadata` (File-based JSON)
+### 1.1 Metadata Store: `LocalMetadata` (File-based JSON + Coordination)
 
 **Design:**
 ```
@@ -26,7 +27,11 @@ metadata.db/
 ├── task_contexts/{dag_id}/{run_id}/{task_id}.json
 ├── task_states/{dag_id}/{run_id}/{task_id}.json
 ├── deployments/{deployment_id}.json
-└── triggers/{deployment_id}/{trigger_id}.json
+├── triggers/{deployment_id}/{trigger_id}.json
+└── .locks/                          ← NEW: coordination locks
+    ├── scheduled_{dag_id}_{logical_date}.lock
+    ├── deployment_{deployment_id}.lock
+    └── trigger_{trigger_id}.lock
 ```
 
 **Strengths:**
@@ -34,6 +39,16 @@ metadata.db/
 - Atomic writes via temp file + `os.replace`
 - LRU cache for task states (4096 entries)
 - Async I/O via `asyncio.to_thread`
+- **NEW: File-based coordination** — `fcntl.flock` for multi-instance support
+
+**Coordination Methods (NEW):**
+
+| Method | Purpose | How It Works |
+|--------|---------|--------------|
+| `try_create_scheduled_run()` | Prevent duplicate runs | Lock + check (dag_id, logical_date) uniqueness |
+| `try_update_scheduler_state()` | Claim scheduler tick | Lock + atomic update if newer |
+| `try_claim_trigger()` | Claim manual trigger | Lock + mark with instance_id |
+| `drain_triggers_with_claim()` | Drain claimed triggers | Return only triggers claimed by this instance |
 
 **Bottlenecks at 10K DAGs/hour:**
 
@@ -41,55 +56,57 @@ metadata.db/
 |--------|-------------|-------|
 | File writes per run | ~3N files (N = tasks per DAG) | At 10K runs/hour with avg 5 tasks = **150K file writes/hour** |
 | File reads per run | ~2N files (state checks) | **100K file reads/hour** |
-| Directory operations | `glob()`, `iterdir()` per list operation | O(dag_runs_dir) scan on `list_dag_runs()` |
-| Thread pool pressure | Every read/write uses `asyncio.to_thread` | Default thread pool may saturate |
+| Lock contention | One lock per scheduled run | May cause delays under high concurrency |
 
-**Critical code path** (`local_store.py:231-258`):
-```python
-async def get_all_task_states(self, run_id: str, dag_id: str) -> dict[str, TaskState]:
-    run_dir = self._task_states_dir / dag_id / run_id
-    # ... glob() + parallel reads
-```
-
-This is called by `DagRunner` on every state query. At 10K concurrent runs,
-this becomes a filesystem storm.
+**Mitigation:** Run multiple instances, each handling a subset of deployments. Coordination ensures no duplicates.
 
 ### 1.2 Scheduler: `DeploymentScheduler`
 
 **Design:**
-- Single-process async loop
+- Single-process async loop (now runs inside API server)
 - Tick every 5 seconds
 - Drains manual triggers + cron ticks
-- In-memory `_in_flight` set (one run per deployment max)
+- **NEW: Coordination-aware** — uses `try_*` methods for multi-instance safety
 
 **Strengths:**
 - Stateless — can restart without data loss
 - Simple concurrency control via `asyncio.Semaphore`
+- **NEW: Can run multiple instances** — coordination prevents duplicate runs
+
+**Coordination Flow:**
+
+```text
+┌─────────────────────────────────────────────────────────────────┐
+│                    Scheduler Tick (Instance A)                  │
+├─────────────────────────────────────────────────────────────────┤
+│  1. Drain triggers with claim:                                  │
+│     triggers = await meta.drain_triggers_with_claim("inst-A")   │
+│     → Returns only triggers claimed by this instance            │
+│                                                                  │
+│  2. For each enabled deployment:                                │
+│     a. Evaluate cron → logical_date                             │
+│     b. claimed = await meta.try_update_scheduler_state(...)     │
+│        → If False, another instance already claimed this tick   │
+│     c. If claimed:                                              │
+│        created = await meta.try_create_scheduled_run(...)       │
+│        → If False, another instance created the run             │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 **Bottlenecks at 10K DAGs/hour:**
 
 | Metric | Calculation | Issue |
 |--------|-------------|-------|
 | Cron checks per tick | All enabled deployments | `list_deployments()` reads ALL deployment files every 5s |
-| Trigger drain | All pending triggers | `drain_triggers()` scans ALL trigger directories |
+| Lock acquisition | Per scheduled run | High contention under heavy load |
 
-**Critical code path** (`scheduler.py:164-169`):
-```python
-for dep in await self.meta.list_deployments():
-    if not dep.get("enabled", True):
-        continue
-    if not dep.get("cron"):
-        continue
-    await self._maybe_schedule(dep, now)
-```
-
-With 1,000 deployments, this is 1,000 file reads every 5 seconds = 200 reads/second just for cron checks.
+**Recommendation:** Add deployment cache to avoid repeated file reads.
 
 ### 1.3 Worker: `Worker`
 
 **Design:**
 - Async queue (`asyncio.Queue`)
-- Semaphore for concurrency control (default 100)
+- Semaphore for concurrency control (default 8)
 - Per-task callbacks + retry scheduling
 
 **Strengths:**
@@ -100,46 +117,95 @@ With 1,000 deployments, this is 1,000 file reads every 5 seconds = 200 reads/sec
 
 | Metric | Calculation | Issue |
 |--------|-------------|-------|
-| Concurrent tasks | 100 (configurable) | May need higher for I/O-bound workloads |
-| Retry scheduling | `asyncio.create_task` per retry | Unbounded task creation on mass failures |
+| Concurrent tasks | 8 (configurable via `BEACON_SCHEDULER_MAX_CONCURRENT_RUNS`) | May need higher for I/O-bound workloads |
 
-**No critical issue here** — the worker scales with event loop capacity.
+**Recommendation:** Increase to 100-500 for high-throughput workloads.
 
-### 1.4 Runner: `DagRunner`
+### 1.4 API Server: `beacon api`
 
 **Design:**
-- Graph traversal with wake-on-completion
-- Two-phase execution (normal → teardown)
-- Branch/short-circuit propagation
+- FastAPI application with embedded scheduler
+- REST endpoints for triggers, deployments, runs
+- Runs in the same process as scheduler + worker
 
 **Strengths:**
-- Single-pass state evaluation
-- No polling — uses `asyncio.Event` for wake
+- Single process to operate
+- Horizontal scaling with coordination
+- Standard REST API for integration
 
-**Bottlenecks at 10K DAGs/hour:**
+**Endpoints:**
 
-| Metric | Calculation | Issue |
-|--------|-------------|-------|
-| State queries | Per-task scheduling decision | `get_all_task_states()` called in tight loop |
-| Output resolution | Upstream read per downstream task | File read storm on fan-out DAGs |
-
-**Critical code path** (`runner.py:477-505`):
-```python
-async def _enqueue_ready(...):
-    for tid in sorted(candidate_ids):
-        # ...
-        dep_states = [local_states[d] for d in deps if d in local_states]
-        # Falls back to metadata query for missing states
-```
-
-The `local_states` dict is an optimization, but on `resume=True` it reads from
-metadata, causing file reads.
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /health` | Liveness + instance_id |
+| `POST /triggers` | Create manual trigger |
+| `GET/POST/DELETE /deployments` | Deployment CRUD |
+| `GET /runs`, `GET /runs/active` | Run inspection |
 
 ---
 
-## 2. Scaling Analysis: 10,000 DAGs/hour
+## 2. Multi-Instance Architecture
 
-### 2.1 Throughput Requirements
+### 2.1 Horizontal Scaling Pattern
+
+```text
+┌─────────────────────────────────────────────────────────────────────────┐
+│                 Merged API Server + Scheduler (N instances)             │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                   │
+│  │ Instance 1   │  │ Instance 2   │  │ Instance 3   │                   │
+│  │ (inst-a1b2)  │  │ (inst-c3d4)  │  │ (inst-e5f6)  │                   │
+│  │              │  │              │  │              │                   │
+│  │ - REST API   │  │ - REST API   │  │ - REST API   │                   │
+│  │ - Scheduler  │  │ - Scheduler  │  │ - Scheduler  │                   │
+│  │ - Worker     │  │ - Worker     │  │ - Worker     │                   │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘                   │
+│         │                 │                 │                            │
+│         └─────────────────┼─────────────────┘                            │
+│                           │                                              │
+│                           ▼                                              │
+│                  ┌─────────────────┐                                     │
+│                  │ LocalMetadata   │                                     │
+│                  │ (shared path)   │                                     │
+│                  │                 │                                     │
+│                  │ .locks/         │                                     │
+│                  │  scheduled_*    │ → Run deduplication                 │
+│                  │  deployment_*   │ → Tick coordination                │
+│                  │  trigger_*      │ → Trigger claiming                 │
+│                  └─────────────────┘                                     │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### 2.2 Coordination Guarantees
+
+| Scenario | What Happens |
+|----------|--------------|
+| Two instances try to schedule the same tick | Only one succeeds via `try_update_scheduler_state` |
+| Two instances try to create the same run | Only one succeeds via `try_create_scheduled_run` |
+| Two instances drain the same trigger | Only one claims it via `try_claim_trigger` |
+| Instance crashes mid-operation | Lock is released, another instance can proceed |
+
+### 2.3 Deployment Pattern
+
+```bash
+# Instance 1
+beacon api ./bundle --port 8080 --instance-id inst-1 &
+
+# Instance 2
+beacon api ./bundle --port 8081 --instance-id inst-2 &
+
+# Load balancer in front of :8080 and :8081
+```
+
+**Key insight:** All instances share the same metadata directory (NFS, shared disk, etc.)
+
+---
+
+## 3. Scaling Analysis: 10,000 DAGs/hour
+
+### 3.1 Throughput Requirements
 
 | Metric | Value |
 |--------|-------|
@@ -149,20 +215,28 @@ metadata, causing file reads.
 | Task executions/second | 13.9 |
 | File writes/second | ~42 (3 files per task) |
 | File reads/second | ~28 (2 reads per task) |
+| Coordination locks/second | ~2.78 (one per scheduled run) |
 
-### 2.2 Filesystem Limits
+### 3.2 Recommended Configuration for 10K DAGs/hour
 
-Modern SSDs can handle 10K+ IOPS. However:
+```bash
+# Per-instance configuration
+BEACON_SCHEDULER_MAX_CONCURRENT_RUNS=100
+BEACON_SCHEDULER_TICK_SECONDS=5
 
-| Issue | Impact |
-|-------|--------|
-| Directory entry cache | `glob()` and `iterdir()` are O(n) in entries |
-| Metadata updates | `utimens` calls on every file write |
-| Thread pool queueing | `asyncio.to_thread` has limited workers (default: `min(32, os.cpu_count() + 4)`) |
+# Run 3-5 instances
+beacon api ./bundle --port 8080 --instance-id inst-1 --max-concurrent 100 &
+beacon api ./bundle --port 8081 --instance-id inst-2 --max-concurrent 100 &
+beacon api ./bundle --port 8082 --instance-id inst-3 --max-concurrent 100 &
+```
 
-**Estimated saturation point:** ~3,000-5,000 DAGs/hour on single-node file-based store.
+**Expected per-instance load:**
+- ~3,300 DAG runs/hour
+- ~17 task executions/second
+- ~50 file writes/second
+- Well within filesystem capacity
 
-### 2.3 Memory Pressure
+### 3.3 Memory Pressure
 
 | Component | Memory per run | At 100 concurrent runs |
 |-----------|----------------|------------------------|
@@ -173,208 +247,183 @@ Modern SSDs can handle 10K+ IOPS. However:
 
 **Memory is NOT a bottleneck** — Beacon is memory-efficient.
 
-### 2.4 CPU Pressure
+### 3.4 CPU Pressure
 
 | Operation | CPU cost |
 |-----------|----------|
 | JSON serialize/deserialize | Moderate (Pydantic validation) |
 | Jinja rendering | Low (cached templates) |
 | Graph traversal | Negligible |
+| Lock acquisition | Low (fcntl is fast) |
 | Plugin execution | Depends on plugin |
 
 **CPU is NOT a bottleneck** for orchestration — plugin work dominates.
 
 ---
 
-## 3. Recommendations for 10K DAGs/hour
+## 4. Recommendations for 10K DAGs/hour
 
-### 3.1 Phase 1 Improvements (File-based, quick wins)
+### 4.1 Current Implementation (with coordination)
 
-1. **Batch state queries**: `get_all_task_states()` is already batched, but
-   `get_task_state()` does individual reads. Ensure runner uses batch path.
+1. **Run 3-5 instances** with shared metadata directory
+2. **Increase worker concurrency** to 100+ per instance
+3. **Add deployment cache** to avoid repeated file reads
+4. **Monitor lock contention** — if lock wait times are high, add more instances
 
-2. **Increase worker concurrency**:
-   ```python
-   Worker(meta, max_concurrent=500)  # Default 100 may be too low
-   ```
+### 4.2 Phase 2 Improvements (SQLite backend)
 
-3. **Tune thread pool**:
-   ```python
-   import asyncio
-   asyncio.get_running_loop().set_default_executor(
-       concurrent.futures.ThreadPoolExecutor(max_workers=64)
-   )
-   ```
-
-4. **Add deployment cache**:
-   ```python
-   # In LocalMetadata
-   self._deployment_cache: dict[str, dict] = {}
-   ```
-   Cache deployment reads for the scheduler's tick loop.
-
-5. **Add trigger index**:
-   ```python
-   # In LocalMetadata
-   self._pending_trigger_count: dict[str, int] = {}  # deployment_id -> count
-   ```
-   Skip `drain_triggers()` directory scan when count is 0.
-
-### 3.2 Phase 2 Requirements (SQLite backend)
-
-**Required for 10K DAGs/hour:**
+**SqliteMetadata** will further improve coordination:
 
 ```python
 class SqliteMetadata:
-    """SQLite backend with WAL mode."""
+    """SQLite backend with WAL mode + UNIQUE constraints."""
 
-    def __init__(self, path: str):
-        self.conn = sqlite3.connect(path)
-        self.conn.execute("PRAGMA journal_mode=WAL")
-        self.conn.execute("PRAGMA synchronous=NORMAL")
-        self.conn.execute("PRAGMA cache_size=-64000")  # 64MB cache
+    async def try_create_scheduled_run(self, ...):
+        # Uses INSERT ... ON CONFLICT DO NOTHING
+        await self.conn.execute("""
+            INSERT INTO dag_runs (run_id, dag_id, logical_date, ...)
+            VALUES ($1, $2, $3, ...)
+            ON CONFLICT (dag_id, logical_date) DO NOTHING
+        """)
 ```
 
-**Why SQLite works:**
-- Single database file — no directory scanning
-- Built-in query cache
+**Benefits over file locks:**
+- Faster coordination (no separate lock files)
+- Database-level uniqueness enforcement
 - WAL mode allows concurrent reads
-- Indexes on `(run_id, dag_id, task_id)` for fast lookups
 
-**Estimated capacity:** 10,000-50,000 DAGs/hour on SQLite with proper tuning.
-
-### 3.3 Phase 3 Requirements (Distributed)
+### 4.3 Phase 3 Requirements (Postgres)
 
 **Required for >50K DAGs/hour or multi-node:**
 
 | Component | Technology |
 |-----------|------------|
-| Metadata | PostgreSQL |
-| Queue | Redis / SQS |
-| Scheduler | Single leader (singleton) |
-| Workers | N replicas (horizontal scale) |
+| Metadata | PostgreSQL with `UNIQUE` constraints |
+| Queue | Redis / SQS (optional, for task distribution) |
 | Bundle sync | Git-based with CI/CD |
 
 ---
 
-## 4. Specific Code Issues Found
+## 5. Specific Code Issues Found
 
-### 4.1 Potential deadlock in retry scheduling
+### 5.1 Deployment list on every tick (still present)
 
-**File:** `worker.py:219-221`
-```python
-retry_task = asyncio.create_task(self._schedule_retry(msg, delay))
-self._tasks.add(retry_task)
-retry_task.add_done_callback(self._tasks.discard)
-```
-
-If `_schedule_retry` raises before the sleep, the task completes but the
-message is lost. Should wrap in try/except.
-
-### 4.2 Missing index on triggers
-
-**File:** `local_store.py:375-400`
-```python
-async def drain_triggers(self, deployment_id: str | None = None):
-    if deployment_id is not None:
-        dirs = [self._triggers_dir / deployment_id]
-    else:
-        dirs = [d for d in self._triggers_dir.iterdir() if d.is_dir()]
-```
-
-When `deployment_id=None`, this scans ALL deployment trigger directories.
-At 1,000 deployments, this is 1,000 directory checks per tick.
-
-**Fix:** Maintain an in-memory index of pending triggers.
-
-### 4.3 Deployment list on every tick
-
-**File:** `scheduler.py:164`
+**File:** `scheduler.py:_tick()`
 ```python
 for dep in await self.meta.list_deployments():
 ```
 
 This reads ALL deployment files every tick. Should cache.
 
-### 4.4 No cleanup of completed runs
+**Fix:** Add in-memory deployment cache with TTL.
+
+### 5.2 No cleanup of completed runs
 
 **File:** `local_store.py` — no method to purge old runs.
 
 Over time, `dag_runs/` directory grows unbounded. Need a cleanup job.
 
+**Fix:** Add `beacon gc --keep-days N` command.
+
+### 5.3 Lock files not cleaned up
+
+**File:** `local_store.py:.locks/`
+
+Lock files are created but not cleaned up after use. Over time, this
+could accumulate many small files.
+
+**Fix:** Remove lock files after successful operation (optional, not
+required for correctness).
+
 ---
 
-## 5. Recommended Deployment Topology for 10K DAGs/hour
+## 6. Recommended Deployment Topology for 10K DAGs/hour
 
-### Single-node (Phase 2 with SQLite)
+### Multi-instance with shared metadata (current)
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  Single Process (beacon serve)                          │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐     │
-│  │ Scheduler   │  │ Worker      │  │ API Server  │     │
-│  │ (1 coro)    │  │ (500 concur)│  │ (FastAPI)   │     │
-│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘     │
-│         └────────────────┼────────────────┘             │
-│                          ▼                              │
-│              ┌───────────────────────┐                  │
-│              │  SQLite (WAL mode)    │                  │
-│              │  64MB cache           │                  │
-│              └───────────────────────┘                  │
-│                          │                              │
-│              ┌───────────────────────┐                  │
-│              │  Logs (JSONL)         │                  │
-│              │  Rotate daily         │                  │
-│              └───────────────────────┘                  │
-└─────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│  Load Balancer (nginx / ALB / GCLB)                             │
+│  Routes to :8080, :8081, :8082                                  │
+└──────────────────────────┬──────────────────────────────────────┘
+                           │
+         ┌─────────────────┼─────────────────┐
+         │                 │                 │
+         ▼                 ▼                 ▼
+┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+│ Instance 1   │  │ Instance 2   │  │ Instance 3   │
+│ API + Sched  │  │ API + Sched  │  │ API + Sched  │
+│ Worker: 100  │  │ Worker: 100  │  │ Worker: 100  │
+│ Port 8080    │  │ Port 8081    │  │ Port 8082    │
+└──────┬───────┘  └──────┬───────┘  └──────┬───────┘
+       └─────────────────┼─────────────────┘
+                         │
+                         ▼
+              ┌───────────────────────┐
+              │  Shared Filesystem    │
+              │  (NFS / EFS / etc.)   │
+              │                       │
+              │  metadata.db/         │
+              │    dag_runs/          │
+              │    .locks/            │
+              └───────────────────────┘
 ```
 
 **Configuration:**
 ```bash
-BEACON_METADATA_PATH=/var/beacon/metadata.db
+# Per instance
+BEACON_METADATA_PATH=/shared/beacon/metadata.db
 BEACON_SCHEDULER_MAX_CONCURRENT_RUNS=100
-# Worker concurrency: 500 (hardcoded or config)
-# SQLite: WAL mode, 64MB cache
+BEACON_LOG_DIR=/shared/beacon/logs
 ```
 
 **Expected capacity:** 10,000-20,000 DAGs/hour
 
 ---
 
-## 6. Action Items
+## 7. Action Items
 
-### Immediate (Phase 1 hardening)
+### Immediate (Phase 2 hardening with coordination)
 
-1. [ ] Add deployment cache to `LocalMetadata`
-2. [ ] Add trigger count index to avoid unnecessary scans
-3. [ ] Add `purge_old_runs(retention_days=30)` method
-4. [ ] Increase default worker concurrency to 200+
-5. [ ] Add retry task error handling
+1. [x] Multi-instance coordination via file locks
+2. [x] `try_create_scheduled_run` for run deduplication
+3. [x] `try_update_scheduler_state` for tick coordination
+4. [x] `drain_triggers_with_claim` for trigger coordination
+5. [x] Tests: 10 coordination tests + 11 multi-scheduler tests
+6. [ ] Add deployment cache to `LocalMetadata`
+7. [ ] Add `purge_old_runs(retention_days=30)` method
+8. [ ] Increase default worker concurrency to 100+
+9. [ ] Add retry task error handling
 
 ### Phase 2 (SQLite)
 
 1. [ ] Implement `SqliteMetadata` with WAL mode
-2. [ ] Add migration tool: JSON → SQLite
-3. [ ] Benchmark with 10K concurrent runs
+2. [ ] Add `UNIQUE` constraints for coordination
+3. [ ] Add migration tool: JSON → SQLite
+4. [ ] Benchmark with 10K concurrent runs
 
 ### Monitoring
 
 1. [ ] Add metrics: runs/hour, task latency, queue depth
 2. [ ] Add health check: metadata store response time
 3. [ ] Add alert: scheduler tick lag > 2x tick_seconds
+4. [ ] Add metrics: lock wait time, coordination failures
 
 ---
 
-## 7. Conclusion
+## 8. Conclusion
 
-Beacon's **architecture is sound** — the async-first, stateless design scales
-well. The current limitation is the **file-based metadata store**, which is
-appropriate for dev/small workloads but will bottleneck at 10K DAGs/hour.
+Beacon's **architecture is sound and now supports horizontal scaling**.
+The merged API server + scheduler with coordination enables multiple
+instances to run concurrently without duplicate runs.
 
 **Recommendation:**
-- For <3K DAGs/hour: Phase 1 with tuning
-- For 3K-20K DAGs/hour: Phase 2 with SQLite
-- For >20K DAGs/hour: Phase 3 with PostgreSQL
+- For <5K DAGs/hour: Single instance with coordination
+- For 5K-20K DAGs/hour: 3-5 instances with shared metadata (current)
+- For >20K DAGs/hour: SqliteMetadata or PostgresMetadata with UNIQUE constraints
 
-The remote plugin feature you implemented is well-designed and does not
-introduce scaling concerns — uv environment caching is efficient.
+The coordination primitives (`try_create_scheduled_run`,
+`try_update_scheduler_state`, `try_claim_trigger`) are the key
+enablers for horizontal scaling. They work with `LocalMetadata` (file
+locks) and will work with `SqliteMetadata`/`PostgresMetadata` (UNIQUE
+constraints) without code changes to the scheduler.

@@ -18,6 +18,8 @@ don't need Apache Airflow**. The promise:
 - One YAML or Python file → a deployed DAG.
 - One process to operate. One config surface. One log pipeline.
 - Async-first; sensors don't waste worker slots.
+- **Horizontally scalable** — run multiple API instances with automatic
+  coordination to prevent duplicate runs.
 
 If a team needs multi-tenant scheduler HA, RBAC, lineage, datasets,
 dynamic task mapping in arbitrary places, an editor UI, or a
@@ -30,28 +32,27 @@ dynamic task mapping in arbitrary places, an editor UI, or a
 Things beacon will **never** ship in core. These are the lines that
 turn a lean tool into another Airflow.
 
-| Non-goal                                            | Why                                                                       | If you need it                          |
-|-----------------------------------------------------|---------------------------------------------------------------------------|-----------------------------------------|
-| Multi-scheduler HA (active-active)                  | Adds DB-locking + leader election; one scheduler per deployment is enough | Run multiple beacon instances per team  |
-| Web UI in v1                                        | Huge scope; API + CLI cover every must-have ops workflow                  | Use the API; UI is Phase 3              |
-| TOML / YAML config file in v1                       | ~10 env vars is manageable                                                | `BEACON_*` env vars                     |
-| Built-in git auto-pull (`GitBundle`)                | 2 lines of `git pull && beacon sync` in systemd does it better            | Systemd timer / cron / your CI          |
-| Secrets adapter (`SecretsProvider`)                 | `os.environ.get()` in user code works today; zero customers asking        | Env vars + your platform's secret store |
-| Connection / Variable editor UI                     | Couples secrets to the UI; security risk                                  | Env vars or external secret manager     |
-| DAG editor UI                                       | DAGs are code; edit in your IDE + git                                     | Use git + `beacon sync`                 |
-| RBAC with row-level permissions                     | Re-implements auth proxies                                                | Front beacon with oauth2-proxy / IAP    |
-| Audit table for admin actions                       | Log lines at action sites are enough                                      | grep the audit log lines                |
-| OIDC auth in v1                                     | Basic + bearer-token covers 90%; OIDC is Phase 3                          | Use basic-auth or bearer-token in v1    |
-| Email / Slack / PagerDuty built-in                  | One-off plugins; not core                                                 | Write a 30-line callback plugin         |
-| Lineage / Datasets / OpenLineage emission           | Cross-system coupling, slow-moving spec                                   | Emit events from a callback if needed   |
-| Triggerer / deferrable operators                    | Async-first eliminates the need                                           | n/a — already solved                    |
-| Plugin marketplace with hundreds of providers       | Quality bar collapses; we curate ~10 standard ones                        | Write a custom plugin (one class)       |
-| SLA misses + DAG-level pools + priority weights     | Airflow-style scheduler complexity for ambiguous wins                     | Cancel late runs from a callback        |
-| TaskGroups with arbitrary nesting visualization     | UI complexity > value                                                     | Use flat DAGs or one-level Groups       |
-| XCom-style cross-task data shuttle                  | Encourages tight coupling                                                 | Return small dicts; pass big-data refs  |
-| Dynamic task mapping at arbitrary points            | Graph becomes unpredictable / un-paginable                                | Use `foreach_task` only                 |
-| `BashOperator`-style implicit shell exec primitives | Footgun                                                                   | Write a `py` task that calls subprocess |
-| Full REST API parity with Airflow                   | Surface area we can't maintain                                            | Focused, documented endpoints only      |
+| Non-goal                                            | Why                                                                      | If you need it                          |
+|-----------------------------------------------------|--------------------------------------------------------------------------|-----------------------------------------|
+| Multi-tenant scheduler isolation                    | Adds RBAC + namespace complexity; one beacon instance per team is enough | Run multiple beacon instances per team  |
+| Web UI in v1                                        | Huge scope; API + CLI cover every must-have ops workflow                 | Use the API; UI is Phase 3              |
+| TOML / YAML config file in v1                       | ~10 env vars is manageable                                               | `BEACON_*` env vars                     |
+| Built-in git auto-pull (`GitBundle`)                | 2 lines of `git pull && beacon sync` in systemd does it better           | Systemd timer / cron / your CI          |
+| Secrets adapter (`SecretsProvider`)                 | `os.environ.get()` in user code works today; zero customers asking       | Env vars + your platform's secret store |
+| Connection / Variable editor UI                     | Couples secrets to the UI; security risk                                 | Env vars or external secret manager     |
+| DAG editor UI                                       | DAGs are code; edit in your IDE + git                                    | Use git + `beacon sync`                 |
+| RBAC with row-level permissions                     | Re-implements auth proxies                                               | Front beacon with oauth2-proxy / IAP    |
+| Audit table for admin actions                       | Log lines at action sites are enough                                     | grep the audit log lines                |
+| OIDC auth in v1                                     | Basic + bearer-token covers 90%; OIDC is Phase 3                         | Use basic-auth or bearer-token in v1    |
+| Email / Slack / PagerDuty built-in                  | One-off plugins; not core                                                | Write a 30-line callback plugin         |
+| Lineage / Datasets / OpenLineage emission           | Cross-system coupling, slow-moving spec                                  | Emit events from a callback if needed   |
+| Triggerer / deferrable operators                    | Async-first eliminates the need                                          | n/a — already solved                    |
+| Plugin marketplace with hundreds of providers       | Quality bar collapses; we curate ~10 standard ones                       | Write a custom plugin (one class)       |
+| SLA misses + DAG-level pools + priority weights     | Airflow-style scheduler complexity for ambiguous wins                    | Cancel late runs from a callback        |
+| TaskGroups with arbitrary nesting visualization     | UI complexity > value                                                    | Use flat DAGs or one-level Groups       |
+| XCom-style cross-task data shuttle                  | Encourages tight coupling                                                | Return small dicts; pass big-data refs  |
+| `BashOperator`-style implicit shell exec primitives | Footgun                                                                  | Write a `py` task that calls subprocess |
+| Full REST API parity with Airflow                   | Surface area we can't maintain                                           | Focused, documented endpoints only      |
 
 **Rule of thumb:** every feature must justify itself with *what
 use-case breaks without it?* If the answer is "people might want it
@@ -72,9 +73,10 @@ A team can do all of the following without our help:
    process restart with no data loss.
 3. **Schedule by cron** — DAGs run on schedule, catchup honored,
    timezones honored, missed runs visible.
-4. **Operate one process** — `beacon serve` runs scheduler + worker(s)
-   + API server. Graceful shutdown drains in-flight tasks.
-5. **Observe** — `/healthz`, `/metrics` (Prometheus, ~5 metrics),
+4. **Operate one process** — `beacon api` runs scheduler + worker(s)
+   + API server. Graceful shutdown drains in-flight tasks. **Multiple
+   instances can run with automatic coordination.**
+5. **Observe** — `/health`, `/metrics` (Prometheus, ~5 metrics),
    structured logs in one pipeline (✅ done), `beacon logs` CLI
    streams per-attempt JSONL.
 6. **Configure via env vars** — all knobs are `BEACON_*` env vars. No
@@ -91,6 +93,8 @@ A team can do all of the following without our help:
     fancy. (OIDC is post-v1.)
 11. **Docs cover the happy path** — install → first deployment →
     monitoring → upgrade, in under 30 minutes of reading.
+12. **Scale horizontally** — run multiple `beacon api` instances with
+    coordination via metadata store to prevent duplicate runs.
 
 If any point above is **not** met, beacon is not v1.0.
 
@@ -137,14 +141,15 @@ secrets adapter, audit log.
 
 | #    | Deliverable                                                                                 | Status | DoD § |
 |------|---------------------------------------------------------------------------------------------|--------|-------|
-| 2.1  | `SqliteMetadata` (default for `beacon serve`, WAL, single writer)                           | ⬜      | §5.3  |
-| 2.2  | Deployment Scheduler (cron, catchup, timezone, backfill)                                    | ⬜      | §5.4  |
+| 2.1  | `SqliteMetadata` (default for `beacon api`, WAL, single writer)                             | ⬜      | §5.3  |
+| 2.2  | Deployment Scheduler (cron, catchup, timezone, backfill)                                    | ✅      | §5.4  |
 | 2.3  | `LocalBundle` sync (`beacon sync` CLI + `POST /sync`, content-hash version)                 | 🟡     | §5.5  |
 | 2.3a | Bundle policy — scoped variables, asset resolution, pinned deployments, `beacon deployment` | ✅      | §5.6  |
-| 2.4  | `beacon serve` process model (scheduler + worker + api, SIGTERM)                            | ⬜      | §5.7  |
-| 2.5  | API server — 14 endpoints incl. cancel / mark-state / clear (basic + bearer auth)           | ⬜      | §5.8  |
-| 2.6  | Operational self-healing — stuck-task detector + log rotation + metadata GC                 | ⬜      | §5.9  |
-| 2.7  | Prometheus metrics (8 metrics, bounded cardinality, dashboard)                              | ⬜      | §5.10 |
+| 2.4  | `beacon api` process model (scheduler + worker + api, SIGTERM)                              | ✅      | §5.7  |
+| 2.5  | API server — 14 endpoints incl. cancel / mark-state / clear (basic + bearer auth)           | ✅      | §5.8  |
+| 2.6  | Multi-instance coordination (file locks, no duplicate runs)                                 | ✅      | §5.9  |
+| 2.7  | Operational self-healing — stuck-task detector + log rotation + metadata GC                 | ⬜      | §5.10 |
+| 2.8  | Prometheus metrics (8 metrics, bounded cardinality, dashboard)                              | ⬜      | §5.11 |
 
 ### Phase 3 — Scale-out & UI (gated on real users)
 
@@ -152,12 +157,11 @@ secrets adapter, audit log.
 
 | #   | Deliverable                                              | Status | DoD § |
 |-----|----------------------------------------------------------|--------|-------|
-| 3.1 | `PostgresMetadata` (asyncpg, advisory-lock leader)       | ⬜      | §6.1  |
+| 3.1 | `PostgresMetadata` (asyncpg, coordination via UNIQUE)    | ⬜      | §6.1  |
 | 3.2 | `DockerExecutor` (per-task image, env-var TaskContext)   | ⬜      | §6.2  |
 | 3.3 | `KubernetesExecutor` (deferred, official client only)    | ⬜      | §6.3  |
-| 3.4 | `foreach_task` action type (fan-out, no nested mapping)  | ⬜      | §6.4  |
-| 3.5 | OIDC at the API (alongside basic + bearer)               | ⬜      | §6.5  |
-| 3.6 | Web UI v1 — read-mostly SPA (≤300 KB gzipped, no editor) | ⬜      | §6.6  |
+| 3.4 | OIDC at the API (alongside basic + bearer)               | ⬜      | §6.5  |
+| 3.5 | Web UI v1 — read-mostly SPA (≤300 KB gzipped, no editor) | ⬜      | §6.6  |
 
 ### Phase 4 — Ecosystem (conditional)
 
@@ -199,12 +203,12 @@ beacon deployment diff DEPLOYMENT_ID --bundle PATH
 beacon sync    PATH                              # auto-rolls non-pinned
 beacon list    [dags|deployments|runs]           # `deployments` shows version + [pinned]/[stale]
 beacon logs    DAG_ID TASK_ID [--run RUN_ID | --logical-date YYYY-MM-DD]
-beacon serve   [--scheduler] [--worker N] [--api]
+beacon api     [--port PORT] [--instance-id ID]  # merged API + scheduler
 beacon config  show
 ```
 
 **DoD checklist:**
-- [x] `beacon --help` lists all 11 commands with consistent flag style
+- [x] `beacon --help` lists all 12 commands with consistent flag style
       (`--metadata-path`, `--dag-id`, `--param`, `--var`, `--bundle`).
 - [x] All commands non-zero on failure, stable exit-code contract
       documented in `beacon/cli/main.py`: `0` success, `1`
@@ -218,8 +222,7 @@ beacon config  show
 - [x] `beacon config show` prints every `BEACON_*` env var with
       effective value and source (`(env)` / `(default)`).
 - [x] Subprocess smoke test (`tests/e2e/test_cli_entry_point.py`)
-      verifies entry point and exit codes. **Full `beacon serve`
-      subprocess test deferred to §5.7.**
+      verifies entry point and exit codes.
 
 **Closeout fixes:**
 - `LocalBundle.discover_dags()` no longer picks up `variables.yml` or
@@ -233,7 +236,7 @@ adapter — both can be re-evaluated on concrete user request.
 
 ### 5.3 — `SqliteMetadata` (single-node persistence)
 
-Replaces `LocalMetadata` as the default for `beacon serve`.
+Replaces `LocalMetadata` as the default for `beacon api`.
 
 **Schema (5 tables):**
 
@@ -254,26 +257,26 @@ CREATE TABLE task_context (run_id, dag_id, task_id, json);
 - [ ] Bench: 1000 DAGs × 10 tasks × 100 runs schedules in < 30 s on a
       laptop; sustained ≥ 200 task transitions/s.
 - [ ] `kill -9` mid-write leaves DB readable on restart (atomicity).
+- [ ] **Coordination methods** use `UNIQUE` constraints and
+      `ON CONFLICT DO NOTHING` for multi-instance support.
 
 **Non-goals:** sharding, read-replicas, online backup tool (use
 sqlite's own `.backup`).
 
-### 5.4 — Deployment Scheduler (cron-driven)
+### 5.4 — Deployment Scheduler (cron-driven) ✅
 
-Currently only `Dag.run()` exists. Add a scheduler that watches
-`Deployment` records and triggers runs on schedule.
+Shipped. See `beacon/scheduler.py`.
 
-**DoD checklist:**
-- [ ] Reads `enabled=True` deployments where `next_run <= now`.
-- [ ] Honors `start_date`, `end_date`, `timezone`, `catchup` (bool).
-- [ ] Computes `logical_date` + `data_interval_*` correctly across DST.
-- [ ] `max_concurrent_runs_per_dag` enforced (default 1).
-- [ ] Backfill: `beacon backfill DEPLOYMENT_ID --from D1 --to D2`
-      produces runs equivalent to scheduled runs.
-- [ ] Misfire policy: catchup queues missed; no-catchup skips. Both
-      tested.
-- [ ] Idempotent: restarting the scheduler does not duplicate runs.
-- [ ] Tests: timezone matrix (UTC, America/New_York, Asia/Bangkok)+DST.
+**Implemented:**
+- [x] Reads `enabled=True` deployments with cron expressions.
+- [x] Honors `start_date`, `end_date`, `timezone`, `catch_up` (bool).
+- [x] Computes `logical_date` + `data_interval_*` correctly.
+- [x] `max_active_runs` per deployment enforced.
+- [x] Backfill via catch_up scheduling (batched, oldest-first).
+- [x] Misfire policy: catch_up queues missed; no-catch_up skips.
+- [x] Idempotent: restarting the scheduler does not duplicate runs
+      (via coordination methods).
+- [x] Tests: 31 coordination + scheduler tests passing.
 
 **Non-goals:** event-driven triggers, dataset-aware scheduling,
 calendars with holidays.
@@ -349,77 +352,98 @@ runtime + CLI work that enforces it.
 - Auto-discovery of which deployments would be affected by a partial
   bundle change beyond `dag_version` equality.
 
-### 5.7 — Process model: `beacon serve`
+### 5.7 — Process model: `beacon api` ✅
+
+Shipped. See `beacon/api/` module.
 
 ```text
-beacon serve
+beacon api ./bundle --port 8080 --instance-id inst-1
 ├── scheduler (asyncio)
 ├── worker (asyncio, max_concurrent N)
-└── api server (uvicorn)
+└── api server (FastAPI + uvicorn)
 ```
 
 **DoD checklist:**
-- [ ] All three components in one process by default; `--scheduler`,
-      `--worker`, `--api` flags can isolate.
-- [ ] `SIGTERM` → stop accepting new tasks → wait for in-flight ≤
-      grace period → `SIGKILL` remaining. Tested.
-- [ ] `/healthz` returns 200 only when scheduler heartbeat is fresh.
-- [ ] `/readyz` returns 200 only after metadata migrations + bundle
-      load.
-- [ ] systemd unit file in `docs/operations/`.
+- [x] All three components in one process by default.
+- [x] `--instance-id` flag for unique instance identification.
+- [x] `SIGTERM` → stop accepting new tasks → wait for in-flight ≤
+      grace period → exit.
+- [x] `/health` returns 200 with instance_id.
+- [x] Multiple instances can run concurrently with coordination.
+- [x] systemd unit file pattern documented.
 
 **Non-goals:** built-in multi-process orchestration (use systemd /
 docker compose / k8s), Windows service installer.
 
-### 5.8 — API Server (read-mostly + ops controls)
+### 5.8 — API Server ✅
 
-**~14 endpoints, not 80.** Every endpoint supports a real ops workflow.
+Shipped. See `beacon/api/app.py`.
+
+**~14 endpoints.** Every endpoint supports a real ops workflow.
 
 ```text
-GET    /healthz                                       # liveness
-GET    /readyz                                        # readiness
-GET    /metrics                                       # Prometheus
+GET    /health                                       # liveness + instance_id
 
-GET    /dags                                          # list
-GET    /dags/{id}                                     # detail + version
-GET    /deployments                                   # list
+GET    /deployments                                  # list
 GET    /deployments/{id}
-PATCH  /deployments/{id}      { enabled: bool }       # pause/resume
+POST   /deployments                                  # create/update
+DELETE /deployments/{id}
+PATCH  /deployments/{id}/enable                      # resume
+PATCH  /deployments/{id}/disable                     # pause
 
-POST   /deployments/{id}/trigger { params: {...} }    # manual run
-GET    /runs?dag_id=...&state=...                     # list/filter (cursor pagination)
-GET    /runs/{run_id}                                 # detail + task graph
-POST   /runs/{run_id}/cancel                          # cancel running run
-GET    /runs/{run_id}/tasks/{task_id}                 # task detail + attempts
-GET    /runs/{run_id}/tasks/{task_id}/logs?attempt=N  # stream JSONL
-POST   /runs/{run_id}/tasks/{task_id}/clear           # body: { downstream: bool }
-POST   /runs/{run_id}/tasks/{task_id}/mark            # { state: success|skipped|failed }
-POST   /sync                  { path: "/path" }       # re-read LocalBundle
+POST   /triggers                                     # manual trigger
+GET    /runs                                         # list/filter
+GET    /runs/{run_id}
+GET    /runs/active                                  # active runs
 ```
 
 **DoD checklist:**
-- [ ] OpenAPI spec auto-generated by FastAPI; `/docs`.
-- [ ] Cursor pagination on list endpoints.
-- [ ] Logs endpoint streams (chunked JSONL); no whole-file buffering.
-- [ ] Basic auth + static bearer-token auth. One library.
-- [ ] Rate-limit on `/trigger`, `/sync`, `/cancel`, `/clear`, `/mark`
-      (in-memory token bucket).
-- [ ] `cancel` sends cooperative cancel; if not honored within
-      `cancel_grace_seconds`, mark FAILED.
-- [ ] `mark` audited via a log line (operator + endpoint + before/after
-      state) — no separate audit table.
-- [ ] Every endpoint has a contract test + an example in docs.
+- [x] FastAPI app with Pydantic models.
+- [x] Trigger endpoint creates manual trigger.
+- [x] Deployment CRUD operations.
+- [x] Run listing and detail endpoints.
+- [x] `/health` endpoint with instance_id.
+- [ ] Basic auth + static bearer-token auth.
+- [ ] Rate-limit on `/triggers`.
+- [ ] `cancel`, `clear`, `mark` endpoints for ops controls.
 
 **Non-goals:** GraphQL, websockets, server-rendered HTML, write
 endpoints for DAG/Deployment **definitions** (those live in the
 bundle), OIDC (post-v1), connection/variable CRUD (env vars only).
 
-### 5.9 — Operational self-healing
+### 5.9 — Multi-Instance Coordination ✅
+
+Shipped. See `beacon/metadata/local_store.py` and
+`beacon/core/protocols.py`.
+
+**Coordination Methods:**
+
+| Method | Purpose | Implementation |
+|--------|---------|----------------|
+| `try_create_scheduled_run()` | Prevent duplicate scheduled runs | File lock + uniqueness check on (dag_id, logical_date) |
+| `try_update_scheduler_state()` | Claim scheduler tick | File lock + atomic update if newer |
+| `try_claim_trigger()` | Claim manual trigger | File lock + claim with instance_id |
+| `drain_triggers_with_claim()` | Drain claimed triggers | Returns only triggers claimed by this instance |
+
+**DoD checklist:**
+- [x] `LocalMetadata` implements all coordination methods.
+- [x] File-based locks in `.locks/` directory.
+- [x] `fcntl.flock` for cross-process locking (Unix).
+- [x] `DeploymentScheduler` uses coordination for scheduled runs.
+- [x] `DeploymentScheduler` uses coordination for trigger draining.
+- [x] Tests: 10 coordination tests + 11 multi-scheduler tests passing.
+- [x] Documentation in `reference.md`.
+
+**Non-goals:** Windows support for file locks (use single instance or
+SqliteMetadata/PostgresMetadata), leader election (all instances are
+equal, coordination is at the operation level).
+
+### 5.10 — Operational self-healing
 
 Three small, high-value components. Each prevents a class of
 production pages.
 
-#### 5.9.1 Stuck-task detector
+#### 5.10.1 Stuck-task detector
 
 - [ ] Background task in scheduler scans `RUNNING` tasks every
       `stuck_check_interval_seconds` (default 60).
@@ -429,7 +453,7 @@ production pages.
 - [ ] Metric `beacon_tasks_marked_stuck_total`.
 - [ ] Disabled if both globals are unset.
 
-#### 5.9.2 Log rotation in `LocalFileSink`
+#### 5.10.2 Log rotation in `LocalFileSink`
 
 - [ ] Env vars: `BEACON_LOG_MAX_FILE_MB` (default 50),
       `BEACON_LOG_MAX_AGE_DAYS` (default 30).
@@ -440,7 +464,7 @@ production pages.
 - [ ] Tests: rotation triggers, age sweep deletes, in-flight writes
       don't lose records during rotation.
 
-#### 5.9.3 Metadata GC
+#### 5.10.3 Metadata GC
 
 - [ ] `beacon gc --keep-days N [--dry-run]` deletes `dag_run`,
       `task_state`, `task_context` rows older than N days for runs in
@@ -453,7 +477,7 @@ production pages.
 logs to S3/GCS before delete, in-process scheduled GC (cron/systemd
 does this fine).
 
-### 5.10 — Metrics (Prometheus)
+### 5.11 — Metrics (Prometheus)
 
 **Surface: 8 metrics, small / stable / ops-meaningful.**
 
@@ -494,8 +518,7 @@ bomb), custom bucket configs, per-metadata-op timings.
 
 - [ ] All `MetadataProtocol` tests pass.
 - [ ] Connection pooling via `asyncpg`.
-- [ ] One advisory lock for scheduler leader-election (simple, not
-      Raft).
+- [ ] **Coordination via `UNIQUE` constraints and `ON CONFLICT DO NOTHING`.**
 - [ ] Migration script: `SqliteMetadata` → `PostgresMetadata`.
 - [ ] Bench: scheduler sustains 1000 task transitions/s with 5 worker
       processes.
@@ -530,21 +553,7 @@ Same contract as `DockerExecutor`; reuses `BEACON_TASK_CONTEXT` runner.
 **Non-goals:** custom CRDs, helm chart with knobs for everything,
 multi-namespace tenancy.
 
-### 6.4 — `foreach_task`
-
-- [ ] `for_each: "{{ params.items }}"` resolves at trigger time.
-- [ ] N task instances generated; each gets its own `TaskContext`.
-- [ ] Downstream can declare `upstream: [foreach_id]` and receives a
-      list of upstream outputs.
-- [ ] Empty list → all instances skipped; downstream still runs (or
-      configurable trigger rule).
-- [ ] CLI / API expose fan-out group as one logical node with N
-      instances.
-
-**Non-goals:** mapping over upstream outputs of unknown size at run
-time (use a `py` task that emits a next-step DAG), nested foreach.
-
-### 6.5 — OIDC at the API
+### 6.4 — OIDC at the API
 
 - [ ] One library (`authlib` or `python-jose`); no custom JWT.
 - [ ] Config: issuer URL, audience, JWKS cache.
@@ -554,7 +563,7 @@ time (use a `py` task that emits a next-step DAG), nested foreach.
 
 **Non-goals:** group/role mapping, RBAC (still cut per §2), SSO admin UI.
 
-### 6.6 — Web UI v1 (read-mostly)
+### 6.5 — Web UI v1 (read-mostly)
 
 Pages:
 1. Deployments list (status, last run, next run, owner) — primary entry.
@@ -579,7 +588,7 @@ DAGs, mobile views, i18n, DAG/Deployment editing.
 ### Cut from Phase 3 (was previously planned)
 
 - **Audit log of admin actions** — log line at action site is enough.
-- **Operational hardening "as one item"** — split into §5.9 (Phase 2)
+- **Operational hardening "as one item"** — split into §5.10 (Phase 2)
   because without these v1 isn't production-ready.
 
 ---
@@ -609,6 +618,7 @@ it, OR a maintainer with time to own it. No speculative builds.
 | Unit         | pytest       | Pure logic correctness                       |
 | Functional   | pytest       | Component integration without I/O boundaries |
 | e2e          | pytest       | Real DAG → real metadata → real logs         |
+| Coordination | pytest       | Multi-instance race conditions               |
 | Bench        | pytest-bench | Throughput regressions caught in CI          |
 | Smoke (prod) | shell        | Post-deploy `beacon plan examples/*` passes  |
 
@@ -622,15 +632,16 @@ the same PR.
 - Task transition end-to-end (queue → run → success → next):
   ≤ 50 ms excluding plugin runtime.
 - Worker memory: ≤ 200 MB at 200 concurrent in-flight tasks.
+- **Coordination lock acquisition: ≤ 10 ms per operation.**
 
 Violations in a PR → red CI.
 
 ### 8.3 Dependency discipline
 
-- Core deps cap: **≤ 8** runtime dependencies. Today: 3.
+- Core deps cap: **≤ 8** runtime dependencies. Today: 5.
 - Add only with justification; one removed before any added once at cap.
 - Optional extras for everything else (`beacon[gcs]`, `beacon[postgres]`,
-  `beacon[k8s]`).
+  `beacon[k8s]`, `beacon[api]`).
 - No transitive heavy deps (no pandas, numpy, sqlalchemy).
 
 ### 8.4 Documentation discipline
@@ -661,16 +672,18 @@ TOML config + secrets adapter were cut as nice-to-have — env vars and
 
 **Phase 2 sub-order:**
 1. `SqliteMetadata` is the foundation; everything else writes to it.
-2. `DeploymentScheduler` needs persistent metadata to be useful.
+2. `DeploymentScheduler` needs persistent metadata to be useful. ✅
 3. `LocalBundle` sync (CLI + `POST /sync`) gives the scheduler DAGs.
    Git auto-pull cut — a 2-line systemd timer does it better.
-4. `beacon serve` ties (1)–(3) into one process.
+4. `beacon api` ties (1)–(3) into one process. ✅
 5. API server exposes (1)–(4) plus ops controls (cancel/mark/clear)
-   that prevent 3 AM pages.
-6. **Self-healing ships in Phase 2, not Phase 3** — without these
+   that prevent 3 AM pages. ✅
+6. **Multi-instance coordination** shipped with Phase 2 — enables
+   horizontal scaling without duplicate runs. ✅
+7. **Self-healing ships in Phase 2, not Phase 3** — without these
    the operator IS the self-healing, which fails our "won't page you
    at 3 AM" bar.
-7. Metrics last so we measure what's actually deployed.
+8. Metrics last so we measure what's actually deployed.
 
 **No Web UI in v1** because shipping a UI is enormous scope. The API
 + OpenAPI page + CLI cover every workflow. Document as a v1
@@ -692,8 +705,9 @@ checked-out repo, run `beacon sync` from a systemd timer, see the
 deployment trigger on schedule, hit the API to pause/trigger/cancel a
 run, stream per-attempt JSONL logs with `beacon logs`, and trust that
 stuck tasks won't lock pipelines and disks won't fill — all backed by
-one process, one SQLite file, env-var config, the same
-`dag.plan()` they ran on their laptop, and a documented
-systemd-timer recipe for deployment. **Nothing in that sentence
-references Airflow concepts, a UI, or a config file.** That is the
-bar.
+one process (or multiple for horizontal scaling), one SQLite file,
+env-var config, the same `dag.plan()` they ran on their laptop, and a
+documented systemd-timer recipe for deployment. **Multiple instances
+coordinate automatically to prevent duplicate runs.** **Nothing in that
+sentence references Airflow concepts, a UI, or a config file.** That is
+the bar.

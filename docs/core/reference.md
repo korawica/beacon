@@ -24,6 +24,8 @@ complexity.
 5. **Executor-agnostic.** `TaskContext` is serializable; the same task
    runs on local / Docker / K8s / Batch unchanged.
 6. **Stateless runtime.** All state in the metadata store. Restart-safe.
+7. **Horizontally scalable.** API server + scheduler can scale out with
+   coordination via metadata store.
 
 ### Diff vs Airflow
 
@@ -37,7 +39,7 @@ complexity.
 | Remote execution | KubernetesExecutor + sidecar         | Executor reads TaskContext from store |
 | DAG reuse        | 1 file = 1 DAG = 1 schedule          | 1 DAG, N Deployments                  |
 | Catch-up         | All missed runs fired immediately    | Batched with `max_active_runs`        |
-| Scaling          | Multi-scheduler + DB tuning          | Stateless scheduler + queue           |
+| Scaling          | Multi-scheduler + DB tuning          | Merged API + Scheduler + coordination |
 
 ---
 
@@ -83,35 +85,79 @@ complexity.
 │    {path}/dag_runs/dag_id={dag_id}/{run_id}.json                       │
 │    {path}/task_contexts/dag_id={dag_id}/run_id={run_id}/{task_id}.json │
 │    {path}/task_states/dag_id={dag_id}/run_id={run_id}/{task_id}.json   │
+│    {path}/.locks/                         ← coordination locks         │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Phase 2 — Production Service (planned)
+### Phase 2 — Production Service (current)
+
+Beacon now ships with a merged **API Server + Scheduler** that can scale
+horizontally with coordination via the metadata store.
 
 ```text
-Client (CLI / SDK)
-       │
-       ▼
-API Server (FastAPI) ──┐
-       │               │
-       ▼               ▼
-Scheduler ──enqueue──> Queue ──> Worker ──> Executor
-       │                                       │
-       └────► Metadata Store (SQLite / PG) ◄───┘
-                                               │
-                                               ▼
-                                          Logging Store
+┌─────────────────────────────────────────────────────────────────────────┐
+│                 Merged API Server + Scheduler (N instances)             │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                   │
+│  │ Instance 1   │  │ Instance 2   │  │ Instance 3   │                   │
+│  │ (inst-a1b2)  │  │ (inst-c3d4)  │  │ (inst-e5f6)  │                   │
+│  │              │  │              │  │              │                   │
+│  │ - REST API   │  │ - REST API   │  │ - REST API   │                   │
+│  │ - Scheduler  │  │ - Scheduler  │  │ - Scheduler  │                   │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘                   │
+│         │                 │                 │                            │
+│         └─────────────────┼─────────────────┘                            │
+│                           │                                              │
+│                           ▼                                              │
+│                  ┌─────────────────┐                                     │
+│                  │ LocalMetadata   │                                     │
+│                  │ (file locks)    │                                     │
+│                  │                 │                                     │
+│                  │ .locks/         │                                     │
+│                  │  scheduled_*    │ → Run deduplication                 │
+│                  │  deployment_*   │ → Scheduler state coordination      │
+│                  │  trigger_*      │ → Trigger claiming                  │
+│                  └─────────────────┘                                     │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
-Component matrix:
+### Multi-Instance Coordination
 
-| Component        | Phase 1                | Phase 2 (planned)          |
-|------------------|------------------------|----------------------------|
-| Metadata         | `LocalMetadata`        | `SqliteMetadata` (default) |
-| Executor         | `LocalExecutor`        | + `DockerExecutor` (P3)    |
-| Queue            | `asyncio.Queue`        | `asyncio.Queue` / Redis    |
-| Scheduling       | `DagRunner` only       | + `DeploymentScheduler`    |
-| Process          | `dag.run()` in-process | `beacon serve`             |
+When multiple API server instances run concurrently, they coordinate via
+the metadata store to prevent duplicate runs:
+
+| Coordination Method            | Purpose                          | How It Works                                               |
+|--------------------------------|----------------------------------|------------------------------------------------------------|
+| `try_create_scheduled_run()`   | Prevent duplicate scheduled runs | Atomic create with (dag_id, logical_date) uniqueness check |
+| `try_update_scheduler_state()` | Claim scheduler tick             | Atomic update of last_scheduled_at only if newer           |
+| `try_claim_trigger()`          | Claim manual trigger             | Atomic claim with instance_id tracking                     |
+| `drain_triggers_with_claim()`  | Drain claimed triggers           | Returns only triggers claimed by this instance             |
+
+**LocalMetadata** implements coordination using file-based locks (`fcntl.flock`):
+
+```text
+metadata.db/
+├── .locks/
+│   ├── scheduled_{dag_id}_{logical_date}.lock  ← Run creation lock
+│   ├── deployment_{deployment_id}.lock          ← Scheduler state lock
+│   └── trigger_{trigger_id}.lock                ← Trigger claim lock
+```
+
+For **SqliteMetadata** or **PostgresMetadata**, coordination uses database
+transactions with `UNIQUE` constraints and `ON CONFLICT DO NOTHING`.
+
+### Component Matrix
+
+| Component        | Phase 1                | Phase 2 (current)               |
+|------------------|------------------------|---------------------------------|
+| Metadata         | `LocalMetadata`        | `LocalMetadata` (with locks)    |
+| Executor         | `LocalExecutor`        | `LocalExecutor`                 |
+| Queue            | `asyncio.Queue`        | `asyncio.Queue`                 |
+| Scheduling       | `DagRunner` only       | `DeploymentScheduler` + API     |
+| Process          | `dag.run()` in-process | `beacon api` (merged)           |
+| Coordination     | N/A                    | File locks / DB constraints     |
 
 ---
 
@@ -200,8 +246,6 @@ As runs complete, remaining catch-up runs are scheduled.
 `DagRunner` is the async engine behind these — graph traversal, trigger
 rule evaluation, branch / short-circuit propagation, teardown scheduling,
 DAG-level callbacks, `resume=True` for re-execution of cleared tasks.
-**`DagRunner` runs one DAG one time.** The future `DeploymentScheduler`
-(Phase 2) sits above it and triggers runs from cron.
 
 ---
 
@@ -330,109 +374,6 @@ uses: "gcs-extract"              → ./plugins/gcs_extract.py
 uses: "my-org/etl@1.2.0"         → remote (GitHub)
 uses: "beacon-gcs@2.0.0"         → remote (PyPI)
 ```
-
-### Remote Plugins
-
-Remote plugins run in **completely isolated** virtual environments managed by
-uv — they never touch Beacon's own dependencies. This mirrors how GitHub
-Actions work: the runner installs the action's deps on the fly, completely
-separate from the calling project.
-
-#### Ref formats
-
-| Format | Source | Example |
-|--------|--------|---------|
-| `org/repo@version` | GitHub | `my-org/gcs-plugin@1.2.0` |
-| `package@version` | PyPI | `beacon-gcs@2.0.0` |
-
-uv caches environments by their dependency hash, so the second call with the
-same ref reuses the cached env and does NOT re-download or re-install.
-
-#### Package requirements
-
-The remote package must expose its plugin(s) via the `beacon.plugins`
-entry-point group in its `pyproject.toml`:
-
-```toml
-[project.entry-points."beacon.plugins"]
-"my-org/gcs-plugin" = "my_package.gcs:run"
-```
-
-The value is `module_path:callable` where callable is either:
-
-* **A function** `run(inputs: dict, context: dict) -> dict | None`
-  — simple, no Beacon dependency needed.
-* **A class** that behaves like a Beacon plugin (has an `execute` method).
-  May extend `BasePlugin` (adds Beacon as a dep) or be a plain class.
-
-#### Exit code contract (remote → Beacon control flow)
-
-Remote plugins use `sys.exit(code)` to signal control flow to Beacon:
-
-| Exit code | Constant | Behavior |
-|-----------|----------|----------|
-| `0` | `EXIT_SUCCESS` | Success (default when function returns normally) |
-| `1` | `EXIT_FAILURE` | Generic failure, retry up to `retries` |
-| `2` | `EXIT_TASK_FAILED` | Permanent failure, skip retries |
-| `3` | `EXIT_TASK_SKIPPED` | Mark task SKIPPED |
-| `4` | `EXIT_TASK_RETRY` | Explicit retry requested |
-
-Example remote plugin (function-based, no Beacon dependency):
-
-```python
-# my_package/gcs.py
-import sys
-
-def run(inputs: dict, context: dict) -> dict:
-    """Copy files from GCS."""
-    bucket = inputs["bucket"]
-    prefix = inputs.get("prefix", "")
-
-    if not bucket_exists(bucket):
-        print(f"Bucket {bucket} not found", file=sys.stderr)
-        sys.exit(2)  # TASK_FAILED — permanent, no retry
-
-    files = list_files(bucket, prefix)
-    if not files:
-        sys.exit(3)  # TASK_SKIPPED — nothing to do
-
-    copied = copy_files(files, inputs["dest_bucket"])
-    return {"files_copied": len(copied)}
-```
-
-Example remote plugin (class-based, with Beacon dependency):
-
-```python
-# my_package/gcs.py
-from beacon import BasePlugin, Context, TaskFailed, TaskSkipped
-
-class GcsCopy(BasePlugin, plugin_name="my-org/gcs-copy"):
-    bucket: str
-    dest_bucket: str
-    prefix: str = ""
-
-    async def execute(self, context: Context) -> dict:
-        if not bucket_exists(self.bucket):
-            raise TaskFailed(f"Bucket {self.bucket} not found")
-
-        files = list_files(self.bucket, self.prefix)
-        if not files:
-            raise TaskSkipped("no files to copy")
-
-        copied = copy_files(files, self.dest_bucket)
-        return {"files_copied": len(copied)}
-```
-
-#### When to use remote plugins
-
-| Use case | Recommendation |
-|----------|----------------|
-| Internal team plugin | Local `./plugins/` or entry-point package |
-| Shared org plugin | Remote from GitHub `org/repo@version` |
-| Third-party plugin | Remote from PyPI `package@version` |
-| Plugin needs different deps than Beacon | Remote (isolated env) |
-| Plugin needs specific Python version | Remote (isolated env) |
-
 
 ### Two ways to add logic
 
@@ -681,21 +622,6 @@ callbacks:
 
 `finished` fires on any DAG terminal state (success or failure).
 
-#### Hook resolution
-
-The `hook` field resolves the same way as plugin `uses`:
-
-| Hook format | Resolution |
-|-------------|------------|
-| `"my-callback"` | Local registry or `./plugins/` |
-| `"my-org/callback@1.1.0"` | Remote from GitHub |
-| `"beacon-slack@2.0.0"` | Remote from PyPI |
-| `MyCallback` (class) | Direct Python reference |
-
-Remote hooks run in isolated uv environments, same as remote plugins.
-The hook package must expose a `beacon.plugins` entry point matching the
-hook name.
-
 ---
 
 ## 7. TaskContext, Attempts, State Machine
@@ -795,27 +721,13 @@ NONE ──┬──> SCHEDULED ──> QUEUED ──> RUNNING ──┬──> 
 | `up_for_retry`  | `queued`          | Worker: after retry delay          |
 | `up_for_retry`  | `failed`          | Manual mark / system limit         |
 
-### Retry detail
-
-```text
-Attempt 1:  QUEUED → RUNNING → error → finish_attempt(FAILED)
-            attempts=[{1: failed}],  state→UP_FOR_RETRY,
-            re-queue in retry_delay * 2^0 = 10s
-Attempt 2:  (10s later) → ...                                    → 20s
-Attempt 3:  (20s later) → plugin succeeds → finish_attempt(SUCCESS)
-            attempts=[{1: failed},{2: failed},{3: success}]
-            state→SUCCESS, outputs={...}
-```
-
-`TaskFailed` exits the retry loop immediately.
-
 ### run_id convention
 
 | Prefix                           | Source                       | Example                         |
 |----------------------------------|------------------------------|---------------------------------|
-| `manual-{dag_id}-{uuid}`         | `dag.run()`                  | `manual-etl-a1b2c3d4`           |
+| `manual-{dag_id}-{uuid}`         | `dag.run()` / API trigger    | `manual-etl-a1b2c3d4`           |
 | `backfill-{dag_id}-{timestamp}`  | `dag.backfill()`             | `backfill-etl-20260101T000000`  |
-| `scheduled-{dag_id}-{timestamp}` | Phase 2 DeploymentScheduler  | `scheduled-etl-20260104T020000` |
+| `scheduled-{dag_id}-{timestamp}` | `DeploymentScheduler`        | `scheduled-etl-20260104T020000` |
 
 Use `beacon.run_trigger(run_id)` to classify.
 
@@ -900,16 +812,6 @@ declares it as its teardown target.
 4. Validated at `plan()` — referenced task must exist; no self-ref.
 5. Multiple independent setup/teardown pairs supported in one DAG.
 
-### Teardown guarantees
-
-| Scenario                       | Plugin teardown         | Task-level teardown          |
-|--------------------------------|-------------------------|------------------------------|
-| Task succeeds                  | ✅ fires (finally)       | ✅ fires (deps terminal)      |
-| Task fails                     | ✅ fires (finally)       | ✅ fires (deps terminal)      |
-| Task times out                 | ✅ fires (finally)       | ✅ fires (deps terminal)      |
-| Task force-failed via `mark()` | — (already done)        | ✅ auto-clears + re-fires     |
-| Task cleared via `clear()`     | ✅ fires on re-execution | ✅ auto-clears + re-fires     |
-
 ---
 
 ## 9. Templating
@@ -966,8 +868,7 @@ Properties:
 - **Sandboxed.** Dunder attacks (`{{ x.__class__.__mro__ }}`) raise
   `SecurityError` via `jinja2.sandbox.SandboxedEnvironment`.
 - **Strict undefined.** `{{ missing }}` raises `UndefinedError` — typos
-  fail loudly. (Exception: `vars('foo')` returns sentinel
-  `<unresolved: vars('foo')>` to allow plan with partial stage data.)
+  fail loudly.
 - **Cached.** Module-level template cache (size 400).
 
 ### Template Functions
@@ -1003,165 +904,46 @@ Properties:
 | `data_interval_end`    | `datetime` |                                              |
 | `attempt_number`       | `int`      | 1-based; bumped on retry                     |
 
-### Render pipeline (two binding sites)
-
-```text
-┌─ 1. Trigger-time render ─ beacon/runner.py: _enqueue ────────────────┐
-│    ctx = {vars, secrets, runtime, outputs={}}                        │
-│    rendered = Renderer(ctx).render(task.inputs)                      │
-│    → stored on TaskContext.inputs                                    │
-│    Failures here (typically because input references outputs.* of    │
-│    an upstream that hasn't run) are left and retried at site 2.      │
-├─ 2. Pre-execute render ── beacon/worker.py: _resolve_upstream_outputs┤
-│    Just before plugin call:                                          │
-│    - load each upstream's TaskContext.outputs into                   │
-│      task_ctx.upstream_outputs                                       │
-│    - re-render task_ctx.inputs with `outputs` namespace bound        │
-│      (vars/secrets already resolved from site 1)                     │
-│    → stored back on TaskContext.inputs, plugin instantiates          │
-├─ 3. Plan render ───────── beacon/plan.py                            │
-│    Same as site 1 but failures become `PlanResult.warnings`.         │
-└──────────────────────────────────────────────────────────────────────┘
-```
-
-By plugin execute time, `TaskContext.inputs` is **fully concrete**.
-Plugins do not import `Renderer`.
-
-### Variable resolution end-to-end
-
-```text
-variables files (scoped under dags/)
-─────────────────────────────────────
-dags/global_variables.yml:           gcs_bucket: my-prod-bucket
-dags/extract_load/variables.yml:     source_system: postgres
-
-Deployment (metadata store)
-──────────────────────────────
-id: daily-customers
-dag_id: extract-load-table
-variable_overrides:                  # optional pinning
-  alert_path: /var/oncall
-
-Trigger: scheduler resolves vars against scoped chain
-   (deployment overrides → dag variables.yml → group global_variables.yml
-    → bundle global_variables.yml)
-   → TaskContext.variables = {source_system: "postgres", gcs_bucket: "my-prod-bucket", ...}
-
-DAG action: inputs templated, then resolved
-   extract.inputs   = {py_statement: "./extract.py", table: "postgres_events",
-                       date: datetime(2026, 6, 4, ...)}
-   transform.inputs = {rows: 42}      # ← outputs.extract.row_count
-```
-
-### Native types cheat-sheet
-
-```yaml
-threshold:  "{{ 0.95 }}"           # float
-batch_size: "{{ 100 * 10 }}"       # int
-enabled:    "{{ True }}"           # bool
-tags:       "{{ ['a', 'b'] }}"     # list
-mixed:      "prefix-{{ x }}"  x=5  # "prefix-5" (mixed → str)
-```
-
-| You want…                   | Write                              |
-|-----------------------------|------------------------------------|
-| Variable from scope         | `{{ vars('key') }}`                |
-| Variable with default       | `{{ vars('key', 'default') }}`     |
-| Nested variable             | `{{ vars('db.host') }}`            |
-| Secret from environment     | `{{ secrets('API_KEY') }}`         |
-| Upstream task output        | `{{ outputs.task_id.key }}`        |
-| Logical date                | `{{ runtime.logical_date }}`       |
-| Run id                      | `{{ runtime.run_id }}`             |
-| Math / coerced literal      | `{{ 1024 * 1024 }}`                |
-| Inline default              | `{{ vars('maybe', 'fallback') }}`  |
-| Jinja filter                | `{{ vars('name') \| upper }}`      |
-
-### Dynamic tasks (`for_each` — Phase 3)
-
-```yaml
-actions:
-  - id: "process-{{ item }}"
-    type: task
-    uses: py
-    for_each: "{{ vars('source_systems') }}"
-    inputs: { source_system: "{{ item }}" }
-```
-
-At trigger time the scheduler resolves `for_each` against variables
-→ gets a list → generates N `TaskContext` instances, each
-independently scheduled, retried, tracked.
-
 ---
 
-## 10. Executor
-
-### Types
-
-| Executor             | Use case                   | How it runs              |
-|----------------------|----------------------------|--------------------------|
-| `LocalExecutor`      | Dev, small workloads       | asyncio in-process       |
-| `DockerExecutor`     | Isolation, reproducibility | Spawn container per task |
-| `KubernetesExecutor` | Production at scale        | Create pod per task      |
-| `BatchExecutor`      | AWS Batch / Cloud Batch    | Submit job per task      |
-
-### Contract
-
-```python
-class BaseExecutor(ABC):
-    executor_type: str = "base"
-    async def run_task(self, task_ctx: TaskContext) -> TaskContext: ...
-```
-
-`run_task` lifecycle:
-1. Resolve plugin from `plugin_name`
-2. Call `task_ctx.start_attempt(executor, executor_ref)`
-3. Instantiate plugin with rendered inputs
-4. Run `plugin.execute(context)` (wrapped in `asyncio.timeout` if configured)
-5. **Always** call `plugin.teardown(context)` in `finally`
-6. Call `task_ctx.finish_attempt(state, error, outputs)`
-7. Return updated `TaskContext`
-
-### Remote executor flow (K8s / Docker / Batch)
-
-```text
-Worker:
-  1. Dequeue {run_id, dag_id, task_id}
-  2. Read TaskContext from metadata store
-  3. executor.run_task(task_ctx):
-     KubernetesExecutor:
-       a. Build Pod spec (plugin image + TaskContext via env var)
-       b. Submit to K8s API
-       c. Poll Pod status (async, no slot waste)
-       d. On completion: read logs, update TaskContext
-  4. Write updated TaskContext to metadata store
-```
-
-TaskContext reaches the container via:
-- `BEACON_TASK_CONTEXT` env var (JSON-serialized), OR
-- Mounted file `/tmp/beacon/task_context.json`, OR
-- API call (pod entrypoint fetches from beacon API)
-
-Container runs: `beacon-runner execute --from-env`.
-
----
-
-## 11. Metadata Store
+## 10. Metadata Store
 
 Protocol-based. Worker, Scheduler, API depend on `MetadataProtocol` —
 any implementing class works.
 
 ```python
 class MetadataProtocol(Protocol):
+    # DagRun operations
     async def create_dag_run(...) -> None: ...
     async def get_dag_run(self, run_id, dag_id) -> dict | None: ...
     async def update_dag_run_state(self, run_id, dag_id, state) -> None: ...
+    async def list_active_runs(self, dag_id=None) -> list[dict]: ...
+
+    # TaskContext operations
     async def put_task_context(self, run_id, dag_id, task_id, ctx) -> None: ...
     async def get_task_context(self, run_id, dag_id, task_id) -> TaskContext | None: ...
+    async def get_task_outputs(self, run_id, dag_id, task_id) -> dict: ...
+    async def clear_task(self, run_id, dag_id, task_id) -> None: ...
+
+    # TaskState operations
     async def set_task_state(self, run_id, dag_id, task_id, state) -> None: ...
     async def get_task_state(self, run_id, dag_id, task_id) -> TaskState | None: ...
     async def get_all_task_states(self, run_id, dag_id) -> dict[str, TaskState]: ...
-    async def get_task_outputs(self, run_id, dag_id, task_id) -> dict: ...
-    async def clear_task(self, run_id, dag_id, task_id) -> None: ...
+
+    # Deployment operations
+    async def upsert_deployment(self, deployment: dict) -> None: ...
+    async def get_deployment(self, deployment_id) -> dict | None: ...
+    async def list_deployments(self) -> list[dict]: ...
+    async def update_deployment_scheduler_state(self, deployment_id, *, last_scheduled_at) -> None: ...
+
+    # Manual trigger queue
+    async def enqueue_trigger(self, deployment_id, variables=None) -> str: ...
+    async def drain_triggers(self, deployment_id=None) -> list[dict]: ...
+
+    # Coordination (multi-instance support)
+    async def try_create_scheduled_run(self, run_id, dag_id, dag_version, logical_date, deployment_id, ...) -> tuple[bool, str]: ...
+    async def try_claim_trigger(self, trigger_id, deployment_id, instance_id) -> bool: ...
+    async def try_update_scheduler_state(self, deployment_id, last_scheduled_at) -> bool: ...
 ```
 
 ### Implementations
@@ -1169,10 +951,10 @@ class MetadataProtocol(Protocol):
 | Store              | Persistence               | Status / Use case                |
 |--------------------|---------------------------|----------------------------------|
 | `LocalMetadata`    | File-based (sharded JSON) | ✅ Default, dev → 1000 DAGs       |
-| `SqliteMetadata`   | Local SQLite              | Pending (Phase 2 default)        |
-| `PostgresMetadata` | Postgres                  | Pending (Phase 3 multi-node)     |
+| `SqliteMetadata`   | Local SQLite              | Planned (Phase 2 default)        |
+| `PostgresMetadata` | Postgres                  | Planned (Phase 3 multi-node)     |
 
-### LocalMetadata performance
+### LocalMetadata Performance
 
 - **Hive-style partitioning** — `dag_id={dag_id}/run_id={run_id}/{task_id}.json`
 - **Fast filtering** — `ls {path}/dag_runs/dag_id=my-dag/`
@@ -1180,13 +962,64 @@ class MetadataProtocol(Protocol):
 - **Async I/O** via `asyncio.to_thread`
 - **Atomic writes** — temp file + `os.replace`
 - **In-memory cache** for task states (scheduler hot path)
-- **Bulk queries** — `get_all_task_states(run_id, dag_id)`
-- **Cache eviction** — `evict_run_from_cache()` on run completion
+- **File-based coordination** — `fcntl.flock` for multi-instance support
+- **Lock directory** — `{path}/.locks/` for coordination primitives
+
+### Coordination Methods
+
+These methods enable multiple scheduler instances to run concurrently
+without creating duplicate runs:
+
+#### `try_create_scheduled_run`
+
+Atomically creates a scheduled run only if one doesn't already exist for
+the given `(dag_id, logical_date)` combination.
+
+```python
+created, run_id = await meta.try_create_scheduled_run(
+    run_id="scheduled-etl-20260606T120000",
+    dag_id="etl",
+    dag_version="v1",
+    logical_date=datetime(2026, 6, 6, 12, 0, 0),
+    deployment_id="daily-etl",
+    variables={"source": "postgres"},
+)
+# created=True → this instance won the race
+# created=False → another instance already created this run
+```
+
+#### `try_update_scheduler_state`
+
+Atomically updates `last_scheduled_at` only if the new value is newer
+than the current value. Used to claim a scheduler tick for a deployment.
+
+```python
+claimed = await meta.try_update_scheduler_state(
+    "daily-etl",
+    datetime(2026, 6, 6, 12, 0, 0),
+)
+# claimed=True → this instance gets to fire the run
+# claimed=False → another instance already claimed this tick
+```
+
+#### `try_claim_trigger`
+
+Atomically claims a manual trigger for processing.
+
+```python
+claimed = await meta.try_claim_trigger(
+    trigger_id="abc123",
+    deployment_id="daily-etl",
+    instance_id="inst-a1b2c3",
+)
+# claimed=True → this instance processes the trigger
+# claimed=False → another instance already claimed it
+```
 
 ### Crash Recovery
 
 When a scheduler/worker pod crashes, tasks in `RUNNING` state become
-orphans ("zombies"). Beacon recovers on scheduler restart:
+orphans ("zombies"). Beacon recovers on scheduler startup:
 
 ```text
 Scheduler Startup
@@ -1215,14 +1048,64 @@ Workers write `heartbeat_at` to task state files while tasks execute:
 
 Default zombie threshold: 5 minutes without heartbeat.
 
-**Difference from Airflow:**
+---
 
-| Aspect | Airflow Deferrable | Beacon |
-|--------|-------------------|--------|
-| Triggerer | Separate process | API Server (planned) |
-| Task state during defer | RUNNING → SCHEDULED | RUNNING with heartbeat |
-| Crash recovery | Rebuilds coroutine from DB | Resume from metadata state |
-| Zombie detection | Periodic job | On scheduler startup |
+## 11. API Server
+
+Beacon ships with a merged **API Server + Scheduler** that can scale
+horizontally. The API provides REST endpoints for managing deployments,
+triggers, and runs.
+
+### Installation
+
+```bash
+pip install beacon[api]
+```
+
+### Running the API Server
+
+```bash
+# Single instance
+beacon api ./my-bundle --port 8080
+
+# Multiple instances for horizontal scaling
+beacon api ./my-bundle --port 8080 --instance-id inst-1 &
+beacon api ./my-bundle --port 8081 --instance-id inst-2 &
+```
+
+### API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check with instance ID |
+| `/triggers` | POST | Create a manual trigger |
+| `/deployments` | GET | List all deployments |
+| `/deployments/{id}` | GET | Get a specific deployment |
+| `/deployments` | POST | Create or update a deployment |
+| `/deployments/{id}` | DELETE | Delete a deployment |
+| `/deployments/{id}/enable` | PATCH | Enable a deployment |
+| `/deployments/{id}/disable` | PATCH | Disable a deployment |
+| `/runs` | GET | List recent DAG runs |
+| `/runs/{id}` | GET | Get a specific run |
+| `/runs/active` | GET | List active (non-terminal) runs |
+
+### Example: Create Trigger via API
+
+```bash
+curl -X POST http://localhost:8080/triggers \
+  -H "Content-Type: application/json" \
+  -d '{"deployment_id": "daily-etl", "variables": {"source": "postgres"}}'
+```
+
+Response:
+
+```json
+{
+  "trigger_id": "abc123def456",
+  "deployment_id": "daily-etl",
+  "message": "Trigger enqueued for daily-etl"
+}
+```
 
 ---
 
@@ -1280,19 +1163,17 @@ Constraints:
 │  1. Parse DAG from bundle (YAML/Python)                              │
 │  2. Validate (``beacon plan`` — plugins exist, no cycles)            │
 │  3. Extract variable requirements from DAG templates                 │
-│     - Detects `{{ vars("key") }}` and `{{ vars("key", default) }}`  │
 │  4. Serialize Deployment → Metadata                                  │
-│     - variable_overrides: per-deployment values                      │
-│     - variable_requirements: required vs optional variables         │
 │  5. Tag Dag with bundle version (content hash / commit SHA)          │
 └─────────────────────────┬───────────────────────────────────────────┘
                           ▼
-┌─ Schedule trigger (Phase 2) ────────────────────────────────────────┐
-│  Scheduler loop:                                                     │
-│    1. Find deployments where enabled and next_run <= now             │
-│    2. For each due: compute logical_date, resolve vars → params      │
-│    3. Create DagRun, TaskContext per action                          │
-│    4. Tasks with deps met → SCHEDULED → QUEUED                       │
+┌─ Schedule trigger ─────────────────────────────────────────────────┐
+│  Scheduler loop (each tick):                                         │
+│    1. Drain manual triggers (with coordination)                      │
+│    2. For each enabled deployment with cron:                         │
+│       a. Evaluate cron expression → logical_date                     │
+│       b. Try to claim tick via try_update_scheduler_state            │
+│       c. If claimed: fire run via try_create_scheduled_run           │
 └─────────────────────────┬───────────────────────────────────────────┘
                           ▼
 ┌─ Task execution ────────────────────────────────────────────────────┐
@@ -1302,8 +1183,7 @@ Constraints:
 │    3. State → RUNNING; fire on_event: start                          │
 │    4. executor.run_task(task_ctx)                                    │
 │    5. Write updated TaskContext                                      │
-│    6. SUCCESS → callbacks; FAILED + retries → UP_FOR_RETRY;          │
-│       FAILED no retries → FAILED                                     │
+│    6. SUCCESS → callbacks; FAILED + retries → UP_FOR_RETRY          │
 └─────────────────────────┬───────────────────────────────────────────┘
                           ▼
 ┌─ DagRun resolution ─────────────────────────────────────────────────┐
@@ -1316,63 +1196,12 @@ Constraints:
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### Four operational scenarios
-
-```text
-1. NORMAL RUN
-   dag.run(params={...})
-2. FIX AND RERUN (task had a bug)
-   dag.clear(run_id=..., task_id="bad_task", downstream=True)
-   → reset task+downstream → re-execute → teardowns re-fire
-   → upstreams NOT re-executed (read from metadata)
-3. KILL STUCK TASK
-   dag.fail(run_id=..., task_id="stuck_task")
-   → mark FAILED → teardown re-fires → resource cleaned up
-4. BACKFILL
-   dag.backfill(start_date=..., end_date=..., cron="0 0 * * *")
-   → one run per cron tick → skip existing (or reset_existing)
-```
-
 ---
 
-## 14. Bundle Layout (summary)
+## 14. Configuration
 
-A team's workflow repository:
-
-```text
-my-workflow-repo/
-├── dags/                    # DAG definitions (reusable templates)
-│   ├── etl_pipeline.yml
-│   └── reports/daily_report.yml
-├── deployments/             # Deployments (per-env, per-config)
-│   ├── customers-from-postgres.yml
-│   └── orders-from-mysql.yml
-├── plugins/                 # Custom plugins (auto-registered)
-│   └── gcs_extract.py
-├── scripts/                 # Python files called by `uses: py`
-│   └── transform.py
-└── variables.yml            # Stage variables (prod, dev, staging)
-```
-
-When a bundle changes:
-1. Load new plugins (overrides existing registrations)
-2. Reparse affected DAGs
-3. Store new serialized DAG with new version
-4. **Running instances continue on their original version**
-   (TaskContext has `dag_version`)
-5. New runs use the new version (unless Deployment pins `dag_version`)
-
-Full bundle policy + variable scoping + pinned-deployment behavior:
-[`deploy.md`](./deploy.md).
-
----
-
-## 15. Configuration
-
-**Beacon is configured by environment variables. No `beacon.toml`, no
-`beacon.yml`, no DB-stored config.** ([roadmap.md](./roadmap.md) §2
-non-goals.) Re-evaluate if the surface grows past ~20 env vars.
-Today: 8.
+**Beacon is configured by environment variables.** No `beacon.toml`, no
+`beacon.yml`, no DB-stored config.
 
 ### Inspect effective config
 
@@ -1388,12 +1217,7 @@ BEACON_SCHEDULER_TICK_SECONDS         5               (default)
 BEACON_SCHEDULER_MAX_CONCURRENT_RUNS  8               (default)
 ```
 
-First debugging step when a setting "doesn't seem to apply".
-
 ### Reference
-
-Single source of truth: `_SPEC` in
-[`beacon/cli/settings.py`](../../beacon/cli/settings.py).
 
 | Variable                                | Default          | Type | Purpose                                                                                                     |
 |-----------------------------------------|------------------|------|-------------------------------------------------------------------------------------------------------------|
@@ -1406,20 +1230,13 @@ Single source of truth: `_SPEC` in
 | `BEACON_SCHEDULER_TICK_SECONDS`         | `5`              | int  | Deployment scheduler loop period.                                                                           |
 | `BEACON_SCHEDULER_MAX_CONCURRENT_RUNS`  | `8`              | int  | Hard cap on in-flight DagRuns across all deployments in one scheduler process.                              |
 
-### Per-command overrides
-
-| Env var                | Flag (where supported)                                          |
-|------------------------|-----------------------------------------------------------------|
-| `BEACON_METADATA_PATH` | `--metadata-path PATH` (`deploy`, `sync`, `list`, `trigger`, …) |
-| `BEACON_LOG_DIR`       | `--log-dir PATH` (`logs`)                                       |
-
 ### Setting them
 
 ```bash
 # Shell
 export BEACON_METADATA_PATH=/srv/beacon/metadata
 export BEACON_LOG_DIR=/var/log/beacon
-beacon scheduler /srv/beacon/bundle
+beacon api /srv/beacon/bundle --port 8080
 ```
 
 ```ini
@@ -1428,7 +1245,7 @@ beacon scheduler /srv/beacon/bundle
 Environment="BEACON_METADATA_PATH=/srv/beacon/metadata"
 Environment="BEACON_LOG_DIR=/var/log/beacon"
 Environment="BEACON_SCHEDULER_MAX_CONCURRENT_RUNS=16"
-ExecStart=/usr/local/bin/beacon scheduler /srv/beacon/bundle
+ExecStart=/usr/local/bin/beacon api /srv/beacon/bundle --port 8080
 Restart=always
 ```
 
@@ -1443,73 +1260,69 @@ services:
     volumes:
       - beacon-meta:/var/beacon/metadata
       - beacon-logs:/var/beacon/logs
+    command: api /bundle --port 8080
 ```
-
-### Secrets
-
-Beacon **does not** ship a secrets adapter
-([roadmap.md](./roadmap.md) cut-list). Inside a `uses: py` task:
-`os.environ.get("MY_API_KEY")` — let your platform (Vault, AWS Secrets
-Manager, K8s secrets, 1Password) inject into the environment. Keeps
-secrets out of the metadata store by construction.
-
-### Per-DAG / per-deployment config
-
-Not what env vars are for. Use:
-- **DAG params** — declared in `dag.yml`, supplied per-deployment via
-  `beacon deploy --param key=value`.
-- **Scoped variables** — `dags/[<group>/]global_variables.yml` +
-  `dags/<group>/<dag>/variables.yml`, layered with per-deployment
-  `beacon deploy --var key=value`. See
-  [`deploy.md`](./deploy.md#variable-resolution).
 
 ---
 
-## 16. Deployment Topologies
+## 15. Deployment Topologies
 
-### Single-node (Phase 1 — current)
+### Single-node (Phase 1 — dag.run)
 
 ```text
 ┌─────────────────────────────────────────────┐
 │  Single Process (dag.run / dag.backfill)    │
 │  DagRunner + Worker + LocalExecutor         │
-│  Metadata: LocalMetadata (local files)       │
+│  Metadata: LocalMetadata (local files)      │
 │  Queue: asyncio.Queue                       │
 │  Logging: LocalFileSink (JSONL)             │
 └─────────────────────────────────────────────┘
 ```
 
-### Service mode (Phase 2 — planned)
+### Single-node service (Phase 2 — current)
 
 ```text
-┌──────────────┐ ┌──────────────────┐ ┌──────────────────┐
-│ API Server   │ │ DeploymentSched  │ │  Worker (N proc) │
-│ (FastAPI)    │ │  (cron loop)     │ │  max_concurrent=50│
-└──────┬───────┘ └──────┬───────────┘ └────────┬─────────┘
-       └────────────────┴───────────────────────┘
-                          │
-                          ▼
-   Metadata: SqliteMetadata · Queue: asyncio.Queue
-   Logging: LocalFileSink + rotation
+┌─────────────────────────────────────────────┐
+│  Single Process (beacon api)                │
+│  REST API + Scheduler + Worker              │
+│  Metadata: LocalMetadata (with locks)       │
+│  Queue: asyncio.Queue                       │
+│  Logging: LocalFileSink (JSONL)             │
+└─────────────────────────────────────────────┘
+```
+
+### Horizontal scaling (Phase 2 — current)
+
+```text
+┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+│ Instance 1   │ │ Instance 2   │ │ Instance 3   │
+│ API + Sched  │ │ API + Sched  │ │ API + Sched  │
+│ port 8080    │ │ port 8081    │ │ port 8082    │
+└──────┬───────┘ └──────┬───────┘ └──────┬───────┘
+       └────────────────┼────────────────┘
+                        │
+                        ▼
+          Metadata: LocalMetadata (shared filesystem)
+          Coordination: File locks in .locks/
 ```
 
 ### Distributed (Phase 3 — planned)
 
 ```text
 ┌──────────────┐ ┌──────────────────┐ ┌────────────────────┐
-│ API (multi)  │ │ DeploymentSched  │ │ Worker Pool (N nodes)│
-│ + LB         │ │  (single)        │ │ Executor: K8s/Batch  │
+│ API (multi)  │ │ Scheduler        │ │ Worker Pool (N nodes)│
+│ + LB         │ │ (can be merged)  │ │ Executor: K8s/Batch  │
 └──────┬───────┘ └──────┬───────────┘ └────────┬───────────┘
        └────────────────┴───────────────────────┘
-                          │
-                          ▼
+                        │
+                        ▼
    Metadata: PostgresMetadata · Queue: Redis / SQS
    Logging: S3 / GCS · Bundle: GitBundle (CI/CD sync)
 ```
 
 ---
 
-## 17. Key Design Decisions
+## 16. Key Design Decisions
 
 | Decision                                                    | Rationale                                                                    |
 |-------------------------------------------------------------|------------------------------------------------------------------------------|
@@ -1521,11 +1334,8 @@ Not what env vars are for. Use:
 | Sharded metadata (by dag_id)                                | Supports 1000+ DAGs without directory-listing degradation                    |
 | Async-only execution                                        | Sensors don't waste worker slots; one event loop handles 100s of tasks       |
 | Plugin teardown in `finally`                                | Resources always cleaned up — no leaks on failure/timeout                    |
-| Two-pass Jinja rendering                                    | Outputs resolved late (worker); everything else resolved early (runner)      |
-| NativeEnvironment + Sandbox                                 | Types preserved through templates AND security enforced                      |
-| `run_id` encodes trigger type                               | Filter/group runs by how they were created                                   |
-| Auto-clear teardown on clear/mark                           | Prevents resource leaks on re-run                                            |
-| Plugin registry (not pip install)                           | Fast resolution; no runtime installation; version-pinned                     |
+| Merged API + Scheduler                                      | Simpler operations; horizontal scaling with coordination                     |
+| Coordination via metadata store                             | No external dependencies; works with file locks or DB constraints            |
 | Single `BasePlugin` for all types                           | Any plugin works with any action — no artificial restriction per action type |
 | Raise strategy (`TaskFailed` / `TaskSkipped` / `TaskRetry`) | Plugins express control flow via exceptions, not return-value contracts      |
 | `action.extract_outputs` normalization                      | Action owns routing logic; plugin stays ignorant of DAG topology             |
@@ -1534,7 +1344,7 @@ Not what env vars are for. Use:
 
 ---
 
-## 18. What Beacon Does NOT Do (by design)
+## 17. What Beacon Does NOT Do (by design)
 
 - **No unbounded cross-task data shuttle.** Upstream outputs are bounded
   (one dict per upstream), declared explicitly, read-only. For large
@@ -1547,10 +1357,10 @@ Not what env vars are for. Use:
   inspectable.
 - **No DAG-Schedule coupling.** A DAG is a template; schedules live in
   Deployments.
-- **No multi-tenant scheduler.** One scheduler per deployment; scale
-  horizontally with separate beacon instances per team/domain.
 - **No Jinja rendering at execution time.** All templates resolved
   before TaskContext reaches the executor. Executors are dumb runners.
+- **No external coordination service required.** Coordination uses the
+  metadata store (file locks or DB transactions).
 
 Full non-goals list (UI, OIDC, secrets adapter, …): see
 [`roadmap.md`](./roadmap.md) §2.
