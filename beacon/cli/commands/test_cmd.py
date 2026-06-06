@@ -12,13 +12,6 @@ from ._shared import parse_kv_options
 @click.argument("path", type=click.Path(exists=True, dir_okay=True))
 @click.option("--dag-id", default=None, help="Pick a DAG when PATH has many.")
 @click.option(
-    "--param",
-    "params",
-    multiple=True,
-    metavar="KEY=VALUE",
-    help="Run param (repeatable).",
-)
-@click.option(
     "--var",
     "variables",
     multiple=True,
@@ -28,13 +21,11 @@ from ._shared import parse_kv_options
 def test(
     path: str,
     dag_id: str | None,
-    params: tuple[str, ...],
     variables: tuple[str, ...],
 ) -> None:
     """Execute a DAG against a throwaway temp metadata dir."""
     dag = load_one_dag(path, dag_id=dag_id)
     result = dag.run(
-        params=parse_kv_options(params),
         variables=parse_kv_options(variables),
     )
     click.echo(f"run_id : {result['run_id']}")

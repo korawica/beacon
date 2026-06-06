@@ -13,11 +13,11 @@ from ._shared import parse_kv_options
 @click.command()
 @click.argument("deployment_id")
 @click.option(
-    "--param",
-    "params",
+    "--var",
+    "variables",
     multiple=True,
     metavar="KEY=VALUE",
-    help="Override param for this run (repeatable).",
+    help="Override variable for this run (repeatable).",
 )
 @click.option(
     "--metadata-path",
@@ -26,7 +26,7 @@ from ._shared import parse_kv_options
 )
 def trigger(
     deployment_id: str,
-    params: tuple[str, ...],
+    variables: tuple[str, ...],
     metadata_path: str | None,
 ) -> None:
     """Enqueue a manual trigger request for DEPLOYMENT_ID.
@@ -41,6 +41,6 @@ def trigger(
         click.echo(f"Unknown deployment: {deployment_id!r}", err=True)
         sys.exit(1)
     tid = asyncio.run(
-        meta.enqueue_trigger(deployment_id, parse_kv_options(params))
+        meta.enqueue_trigger(deployment_id, parse_kv_options(variables))
     )
     click.echo(f"trigger enqueued: {tid}  (deployment={deployment_id})")

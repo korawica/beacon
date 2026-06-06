@@ -3,8 +3,8 @@
 Beacon renders templates at exactly two well-defined points:
 
 1. **Trigger time** — when the scheduler builds the ``TaskContext``. The
-   ``vars()`` macro is bound to the deployment's variables stage and
-   ``params`` is bound to the Deployment params. Output is concrete values
+   ``vars()`` function is bound to the deployment's variable scope and
+   ``secrets()`` reads from environment variables. Output is concrete values
    that are stored in ``TaskContext.inputs``.
 
 2. **Pre-execute time** — at scheduler enqueue, ``outputs.*`` from upstream
@@ -27,8 +27,25 @@ Examples::
 Plugins **never** render templates themselves; they always receive
 concrete, correctly-typed values. The renderer is the only Jinja contact
 point in the system.
+
+Template functions:
+
+``vars(key, default=None)``
+    Access variables from the scoped variable chain. Supports nested keys
+    via dot notation::
+
+        {{ vars("bucket") }}                    → "my-bucket"
+        {{ vars("db.host") }}                   → nested: vars["db"]["host"]
+        {{ vars("missing", "fallback") }}       → "fallback"
+
+``secrets(key)``
+    Access environment variables. Use for API keys, passwords, etc::
+
+        {{ secrets("API_KEY") }}                → os.environ["API_KEY"]
+        {{ secrets("DB_PASSWORD") }}            → os.environ["DB_PASSWORD"]
 """
 
+import os
 from typing import Any
 
 from jinja2 import StrictUndefined, Undefined
@@ -37,7 +54,7 @@ from jinja2.sandbox import SandboxedEnvironment
 
 from beacon.utils import is_jinja
 
-__all__ = ("Renderer",)
+__all__ = ("Renderer", "make_vars_func", "make_secrets_func")
 
 
 class _SandboxedNativeEnvironment(NativeEnvironment, SandboxedEnvironment):
@@ -62,6 +79,82 @@ _ENV = _SandboxedNativeEnvironment(
     autoescape=False,
     cache_size=400,
 )
+
+
+def make_vars_func(
+    variables: dict[str, Any],
+    *,
+    unresolved_sentinel: str = "<unresolved>",
+) -> callable:
+    """Create a ``vars(key, default=None)`` function for Jinja templates.
+
+    Supports nested key access via dot notation::
+
+        vars("bucket")              → variables["bucket"]
+        vars("db.host")             → variables["db"]["host"]
+        vars("missing", "default")  → "default" if key not found
+
+    Args:
+        variables: The variable dict to read from.
+        unresolved_sentinel: Value to return when key is missing and no
+            default is provided. Used by ``beacon plan`` to show unresolved
+            variables without failing.
+
+    Returns:
+        A callable ``vars(key: str, default: Any = None) -> Any``.
+    """
+
+    def vars_func(key: str, default: Any = None) -> Any:
+        """Access variables with optional nested key support."""
+        if "." in key:
+            # Nested access: "db.host" → variables["db"]["host"]
+            parts = key.split(".")
+            value = variables
+            for part in parts:
+                if isinstance(value, dict) and part in value:
+                    value = value[part]
+                else:
+                    # Key path not found
+                    if default is not None:
+                        return default
+                    return f"{unresolved_sentinel}: vars('{key}')"
+            return value
+        else:
+            # Simple access
+            if key in variables:
+                return variables[key]
+            if default is not None:
+                return default
+            return f"{unresolved_sentinel}: vars('{key}')"
+
+    return vars_func
+
+
+def make_secrets_func(prefix: str | None = None) -> callable:
+    """Create a ``secrets(key)`` function for Jinja templates.
+
+    Reads from ``os.environ``. Optionally filters by prefix::
+
+        secrets("API_KEY")          → os.environ["API_KEY"]
+        secrets("DB_PASSWORD")      → os.environ["DB_PASSWORD"]
+
+    Args:
+        prefix: Optional prefix to strip from keys. E.g., prefix="BEACON_"
+            means ``secrets("API_KEY")`` reads ``BEACON_API_KEY``.
+
+    Returns:
+        A callable ``secrets(key: str) -> str | None``.
+    """
+
+    def secrets_func(key: str) -> str | None:
+        """Access environment variables."""
+        env_key = f"{prefix}{key}" if prefix else key
+        value = os.environ.get(env_key)
+        if value is None:
+            return f"<unresolved: secrets('{key}')>"
+        return value
+
+    return secrets_func
 
 
 class Renderer:

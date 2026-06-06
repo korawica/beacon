@@ -139,7 +139,7 @@ class BaseAction(BaseModel):
         logical_date: Any,
         data_interval_start: Any,
         data_interval_end: Any,
-        params: dict[str, Any],
+        variables: dict[str, Any],
         rendered_inputs: dict[str, Any],
     ) -> TaskContext:
         """Build a TaskContext for this action. Called by the scheduler."""
@@ -152,7 +152,7 @@ class BaseAction(BaseModel):
             logical_date=logical_date,
             data_interval_start=data_interval_start,
             data_interval_end=data_interval_end,
-            params=params,
+            variables=variables,
             inputs=rendered_inputs,
             plugin_name=self.plugin_name(),
             retries=getattr(self, "retries", 0),

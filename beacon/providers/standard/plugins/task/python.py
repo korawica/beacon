@@ -172,11 +172,14 @@ class PythonPlugin(BasePlugin, plugin_name="py"):
     # ------------------------------------------------------------------
 
     def _build_template_context(self, context: Context) -> dict:
+        from .....core.renderer import make_vars_func, make_secrets_func
+
+        vars_func = make_vars_func(context.get("variables", {}))
+        secrets_func = make_secrets_func()
+
         return {
-            "params": context.get("params", {}),
-            "vars": lambda n: context.get("vars", {}).get(
-                n, f"<unresolved: vars('{n}')>"
-            ),
+            "vars": vars_func,
+            "secrets": secrets_func,
             "runtime": build_runtime_dict(
                 run_id=context.get("run_id", ""),
                 dag_id=context.get("dag_id", ""),
@@ -225,7 +228,7 @@ class PythonPlugin(BasePlugin, plugin_name="py"):
             dag_id=context.get("dag_id", ""),
             task_id=context.get("task_id", ""),
             attempt_number=context.get("attempt_number", 1),
-            params=self.params,
+            variables=context.get("variables", {}),
             upstream_outputs=context.get("upstream_outputs", {}),
             run_date=context.get("run_date"),
             logical_date=context.get("logical_date"),

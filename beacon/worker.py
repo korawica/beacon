@@ -310,14 +310,17 @@ class Worker:
                     task_ctx.upstream_outputs[uid] = upstream_ctx.outputs
 
         # Late-bind outputs in any remaining Jinja in inputs.
-        from .core.renderer import Renderer
+        from .core.renderer import Renderer, make_vars_func, make_secrets_func
+
+        # Re-create vars/secrets functions for late binding
+        vars_func = make_vars_func(task_ctx.variables)
+        secrets_func = make_secrets_func()
 
         renderer = Renderer(
             {
-                "params": task_ctx.params,
+                "vars": vars_func,
+                "secrets": secrets_func,
                 "outputs": task_ctx.upstream_outputs,
-                # vars/runtime were resolved at trigger time — pass empty/static.
-                "vars": lambda n: f"<unresolved: vars('{n}')>",
                 "runtime": build_runtime_dict(
                     run_id=task_ctx.run_id,
                     dag_id=task_ctx.dag_id,

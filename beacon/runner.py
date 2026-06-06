@@ -193,7 +193,7 @@ class DagRunner:
     async def run(
         self,
         *,
-        params: dict[str, Any] | None = None,
+        variables: dict[str, Any] | None = None,
         run_id: str | None = None,
         logical_date: datetime | None = None,
         dag_version: str = "local",
@@ -219,7 +219,7 @@ class DagRunner:
         )
         try:
             return await self._run_impl(
-                params=params,
+                variables=variables,
                 run_id=run_id,
                 logical_date=logical_date,
                 dag_version=dag_version,
@@ -231,7 +231,7 @@ class DagRunner:
     async def _run_impl(
         self,
         *,
-        params: dict[str, Any] | None = None,
+        variables: dict[str, Any] | None = None,
         run_id: str | None = None,
         logical_date: datetime | None = None,
         dag_version: str = "local",
@@ -240,8 +240,7 @@ class DagRunner:
         """Execute the DAG end-to-end. Returns a :class:`DagRunResult`.
 
         Args:
-            params: Run params (ignored when ``resume=True`` — the original
-                DagRun's persisted params are used).
+            variables: Run-time variable overrides (merged with DagRunner.variables).
             run_id: Reuse a run_id to resume. Required if ``resume=True``.
             logical_date: Initial logical date (ignored on resume).
             dag_version: Stamp on the DagRun + TaskContexts.
@@ -251,7 +250,8 @@ class DagRunner:
                 Use this with :meth:`clear` for backfill / re-run flows.
         """
         run_id = run_id or f"manual-{self.dag.id}-{uuid.uuid4().hex[:8]}"
-        params = params or {}
+        # Merge runner's variables with run-time overrides
+        effective_variables = {**self.variables, **(variables or {})}
         now = logical_date or datetime.now()
         graph = _build_graph(self.dag)
         result = DagRunResult(run_id=run_id, dag_id=self.dag.id)
@@ -263,8 +263,7 @@ class DagRunner:
                     f"Cannot resume: no DagRun {run_id!r} for "
                     f"{self.dag.id!r}. Did you forget to clear first?"
                 )
-            # Use the ORIGINAL params/logical_date for determinism.
-            params = existing.get("params", {}) or {}
+            # Use the ORIGINAL logical_date for determinism.
             persisted_logical = existing.get("logical_date")
             if persisted_logical:
                 try:
@@ -298,7 +297,7 @@ class DagRunner:
                 dag_version=dag_version,
                 state="running",
                 logical_date=now,
-                params=params,
+                variables=effective_variables,
             )
             local_states = {tid: TaskState.NONE for tid in graph.task_map}
 
@@ -345,7 +344,7 @@ class DagRunner:
                 forced_skip=forced_skip,
                 in_flight=in_flight,
                 result=result,
-                params=params,
+                variables=effective_variables,
                 run_id=run_id,
                 dag_version=dag_version,
                 now=now,
@@ -362,7 +361,7 @@ class DagRunner:
                 forced_skip=forced_skip,
                 in_flight=in_flight,
                 result=result,
-                params=params,
+                variables=effective_variables,
                 run_id=run_id,
                 dag_version=dag_version,
                 now=now,
@@ -395,7 +394,7 @@ class DagRunner:
         forced_skip: set[str],
         in_flight: set[str],
         result: DagRunResult,
-        params: dict[str, Any],
+        variables: dict[str, Any],
         run_id: str,
         dag_version: str,
         now: datetime,
@@ -417,7 +416,7 @@ class DagRunner:
                 forced_skip=forced_skip,
                 in_flight=in_flight,
                 result=result,
-                params=params,
+                variables=variables,
                 run_id=run_id,
                 dag_version=dag_version,
                 now=now,
@@ -445,7 +444,7 @@ class DagRunner:
         forced_skip: set[str],
         in_flight: set[str],
         result: DagRunResult,
-        params: dict[str, Any],
+        variables: dict[str, Any],
         run_id: str,
         dag_version: str,
         now: datetime,
@@ -512,7 +511,7 @@ class DagRunner:
                 worker=worker,
                 graph=graph,
                 local_states=local_states,
-                params=params,
+                variables=variables,
                 run_id=run_id,
                 dag_version=dag_version,
                 now=now,
@@ -530,7 +529,7 @@ class DagRunner:
         worker: Worker,
         graph: _Graph,
         local_states: dict[str, TaskState],
-        params: dict[str, Any],
+        variables: dict[str, Any],
         run_id: str,
         dag_version: str,
         now: datetime,
@@ -539,20 +538,23 @@ class DagRunner:
     ) -> None:
         """Build TaskContext and submit to the worker.
 
-        Rendering happens here so that ``params`` / ``vars()`` / ``runtime``
+        Rendering happens here so that ``vars()`` / ``secrets()`` / ``runtime``
         are resolved at enqueue time. Upstream outputs are resolved by the
         worker right before execution.
         """
+        from .core.renderer import make_vars_func, make_secrets_func
+
         merged_inputs = {**self.dag.default_inputs, **action.inputs}
 
-        # Trigger-time render: bind params, vars, runtime. Upstream outputs
+        # Trigger-time render: bind vars, secrets, runtime. Upstream outputs
         # are bound to ``{}`` here; the worker fills them after dep lookup.
+        vars_func = make_vars_func(variables)
+        secrets_func = make_secrets_func()
+
         renderer = Renderer(
             {
-                "params": params,
-                "vars": lambda n: self.variables.get(
-                    n, f"<unresolved: vars('{n}')>"
-                ),
+                "vars": vars_func,
+                "secrets": secrets_func,
                 "runtime": build_runtime_dict(
                     run_id=run_id,
                     dag_id=self.dag.id,
@@ -588,7 +590,7 @@ class DagRunner:
             logical_date=now,
             data_interval_start=now,
             data_interval_end=now,
-            params=params,
+            variables=variables,
             rendered_inputs=rendered_inputs,
         )
         # For teardowns we expose the setup task's outputs even though it's

@@ -1,21 +1,20 @@
 """Deployment Model.
 
 A Deployment binds a reusable DAG template to a specific runtime configuration:
-schedule (cron), params (values for DAG params), variables (stage), and identity
-(shown in the UI). The same DAG can have many Deployments — each one represents
-a distinct production binding.
+schedule (cron), variables (stage-specific config), and identity (shown in the UI).
+The same DAG can have many Deployments — each one represents a distinct production binding.
 
 This is the equivalent of Prefect's `Deployment`. It is the model that fixes
 Airflow's "one DAG file = one schedule" coupling.
 
 Example:
-    Dag(id="extract-load-table", params=[source_name, target_table, columns])
+    Dag(id="extract-load-table")
 
     Deployment(id="daily-customers-from-postgres", dag_id="extract-load-table",
-               cron="0 2 * * *", params={"source_name": "postgres", ...})
+               cron="0 2 * * *", variable_overrides={"source_system": "postgres"})
 
     Deployment(id="hourly-orders-from-mysql", dag_id="extract-load-table",
-               cron="0 * * * *", params={"source_name": "mysql", ...})
+               cron="0 * * * *", variable_overrides={"source_system": "mysql"})
 """
 
 from datetime import datetime
@@ -28,7 +27,7 @@ class Deployment(BaseModel):
     """A deployment of a reusable DAG with specific runtime configuration.
 
     Multiple Deployments can reference the same `dag_id` with different
-    params, variables, and schedules. Each Deployment has its own identity
+    variables and schedules. Each Deployment has its own identity
     in the UI and produces independent DagRuns.
     """
 
@@ -85,13 +84,6 @@ class Deployment(BaseModel):
     )
 
     # --- Runtime configuration ---
-    params: dict[str, Any] = Field(
-        default_factory=dict,
-        description=(
-            "Values for the referenced Dag.params. Resolved into "
-            "TaskContext.params at trigger time."
-        ),
-    )
     variable_overrides: dict[str, Any] = Field(
         default_factory=dict,
         description=(

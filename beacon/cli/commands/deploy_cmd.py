@@ -35,13 +35,6 @@ from ._shared import parse_kv_options
     ),
 )
 @click.option(
-    "--param",
-    "params",
-    multiple=True,
-    metavar="KEY=VALUE",
-    help="Default param value (repeatable).",
-)
-@click.option(
     "--owner",
     "owners",
     multiple=True,
@@ -66,7 +59,6 @@ def deploy(
     timezone: str,
     desc: str | None,
     variable_overrides: tuple[str, ...],
-    params: tuple[str, ...],
     owners: tuple[str, ...],
     disabled: bool,
     metadata_path: str | None,
@@ -89,7 +81,6 @@ def deploy(
         desc=desc,
         enabled=not disabled,
         variable_overrides=parse_kv_options(variable_overrides),
-        params=parse_kv_options(params),
         owners=list(owners),
     )
 

@@ -8,7 +8,6 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, PrivateAttr
 
 from .group import ActionType
-from .param import Param
 
 logger = logging.getLogger("beacon.dag")
 
@@ -29,9 +28,6 @@ class Dag(BaseModel):
     labels: dict[str, str] = Field(
         default_factory=dict,
         description="A mapping of labels",
-    )
-    params: list[Param] = Field(
-        default_factory=list, description="A list of parameters"
     )
     actions: list[ActionType] = Field(
         default_factory=list,
@@ -55,7 +51,6 @@ class Dag(BaseModel):
     def run(
         self,
         *,
-        params: dict[str, Any] | None = None,
         variables: dict[str, Any] | None = None,
         logical_date: datetime | None = None,
         metadata_path: str | None = None,
@@ -99,9 +94,7 @@ class Dag(BaseModel):
                 )
                 variables = None
 
-        dr = _plan(
-            self, params=params, variables=variables, logical_date=logical_date
-        )
+        dr = _plan(self, variables=variables, logical_date=logical_date)
         if not dr.is_valid:
             raise ValueError(f"DAG validation failed:\n{dr.print()}")
 
@@ -121,7 +114,7 @@ class Dag(BaseModel):
         run_id = f"manual-{self.id}-{uuid.uuid4().hex[:8]}"
         result = asyncio.run(
             scheduler.run(
-                params=params or {},
+                variables=variables,
                 run_id=run_id,
                 logical_date=logical_date,
             )
@@ -280,7 +273,6 @@ class Dag(BaseModel):
         end_date: datetime,
         cron: str,
         metadata_path: str,
-        params: dict[str, Any] | None = None,
         variables: dict[str, Any] | None = None,
         reset_existing: bool = False,
         max_concurrent: int = 10,
@@ -298,8 +290,7 @@ class Dag(BaseModel):
             cron: Cron expression that defines the schedule ticks within
                 the range (e.g. ``"0 0 * * *"`` for daily at midnight).
             metadata_path: Persistent metadata store path.
-            params: DAG params applied to every generated run.
-            variables: Stage variables applied to every generated run.
+            variables: Variables applied to every generated run.
             reset_existing: When a run with the deterministic id already
                 exists for a logical date: ``False`` (default) skips it;
                 ``True`` clears every task in that run and re-executes.
@@ -326,7 +317,7 @@ class Dag(BaseModel):
                 end_date=datetime(2026, 1, 7),
                 cron="0 0 * * *",          # daily
                 metadata_path="./meta",
-                params={"source": "postgres"},
+                variables={"source": "postgres"},
                 reset_existing=True,       # re-run any existing days too
             )
         """
@@ -390,7 +381,7 @@ class Dag(BaseModel):
                 else:
                     result = await runner.run(
                         run_id=run_id,
-                        params=params or {},
+                        variables=variables,
                         logical_date=logical_date,
                     )
 
@@ -410,7 +401,6 @@ class Dag(BaseModel):
     def test(
         self,
         *,
-        params: dict[str, Any] | None = None,
         variables: dict[str, Any] | None = None,
         logical_date: datetime | None = None,
     ) -> dict[str, Any]:
@@ -420,7 +410,6 @@ class Dag(BaseModel):
         """
         try:
             run_results = self.run(
-                params=params,
                 variables=variables,
                 logical_date=logical_date,
             )
@@ -452,7 +441,6 @@ class Dag(BaseModel):
     def plan(
         self,
         *,
-        params: dict[str, Any] | None = None,
         variables: dict[str, Any] | None = None,
         logical_date: datetime | None = None,
         data_interval_start: datetime | None = None,
@@ -461,14 +449,13 @@ class Dag(BaseModel):
     ):
         """Validate and render the DAG without executing any plugins.
 
-        Shows resolved inputs per task against real params / variables /
+        Shows resolved inputs per task against real variables /
         logical_date before a single task runs.
         """
         from ..plan import plan as _plan
 
         return _plan(
             self,
-            params=params,
             variables=variables,
             logical_date=logical_date,
             data_interval_start=data_interval_start,
@@ -479,14 +466,12 @@ class Dag(BaseModel):
     def dryrun(
         self,
         *,
-        params: dict[str, Any] | None = None,
         variables: dict[str, Any] | None = None,
         logical_date: datetime | None = None,
         cron: str | None = None,
     ):
         """Deprecated — use ``dag.plan()`` instead."""
         return self.plan(
-            params=params,
             variables=variables,
             logical_date=logical_date,
             cron=cron,

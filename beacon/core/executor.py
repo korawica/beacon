@@ -108,7 +108,7 @@ class LocalExecutor(BaseExecutor):
             "logical_date": task_ctx.logical_date,
             "data_interval_start": task_ctx.data_interval_start,
             "data_interval_end": task_ctx.data_interval_end,
-            "params": task_ctx.params,
+            "variables": task_ctx.variables,
             "attempt_number": task_ctx.attempt_number,
             "upstream_outputs": task_ctx.upstream_outputs,
             "logger": task_logger,

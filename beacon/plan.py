@@ -1,7 +1,7 @@
 """DAG Plan — pre-execution validation and template rendering.
 
 Shows exactly what Beacon will do before you deploy: resolves every
-Jinja template against real params / variables / logical_date so you can
+Jinja template against real variables / logical_date so you can
 catch misconfigured inputs, missing plugins, and graph errors before a
 single task runs.
 
@@ -10,7 +10,6 @@ Usage:
 
     result = plan(
         dag=dag,
-        params={"source_system": "orders"},
         variables={"bucket": "prod-bucket"},
         logical_date=datetime(2026, 6, 3, 2, 0, 0),
         cron="0 2 * * *",            # optional — computes data intervals
@@ -19,7 +18,9 @@ Usage:
     result.is_valid       # True if no errors
 """
 
+import ast
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -36,8 +37,26 @@ class PlanIssue:
     """A single validation issue found during planning."""
 
     task_id: str
-    category: str  # "plugin" | "graph" | "template"
+    category: str  # "plugin" | "graph" | "template" | "variable"
     message: str
+
+
+@dataclass
+class RequiredVariable:
+    """A variable required by the DAG."""
+
+    key: str
+    has_default: bool
+    found_in: str | None  # "variables" if provided, None otherwise
+    default_value: Any = None
+
+
+@dataclass
+class RequiredSecret:
+    """A secret (environment variable) required by the DAG."""
+
+    key: str
+    found_in: str | None  # "environment" if set, None otherwise
 
 
 @dataclass
@@ -60,6 +79,8 @@ class PlanResult:
     warnings: list[str] = field(default_factory=list)
     planned_tasks: list[PlannedTask] = field(default_factory=list)
     task_order: list[str] = field(default_factory=list)
+    required_variables: list[RequiredVariable] = field(default_factory=list)
+    required_secrets: list[RequiredSecret] = field(default_factory=list)
 
     @property
     def is_valid(self) -> bool:
@@ -69,6 +90,48 @@ class PlanResult:
     def __str__(self) -> str:
         """Return a formatted plan report."""
         lines = [f"=== Plan: {self.dag_id} ===", ""]
+
+        # Variables section
+        if self.required_variables:
+            missing_vars = [
+                v
+                for v in self.required_variables
+                if not v.has_default and v.found_in is None
+            ]
+            if missing_vars:
+                lines.append(f"❌ MISSING VARIABLES ({len(missing_vars)}):")
+                for v in missing_vars:
+                    lines.append(f"  {v.key}")
+                lines.append("")
+            else:
+                lines.append(f"✅ VARIABLES ({len(self.required_variables)}):")
+                for v in self.required_variables:
+                    status = (
+                        "✓" if v.found_in else ("~" if v.has_default else "✗")
+                    )
+                    default_str = (
+                        f" (default: {v.default_value!r})"
+                        if v.has_default
+                        else ""
+                    )
+                    lines.append(f"  [{status}] {v.key}{default_str}")
+                lines.append("")
+
+        # Secrets section
+        if self.required_secrets:
+            missing_secrets = [
+                s for s in self.required_secrets if s.found_in is None
+            ]
+            if missing_secrets:
+                lines.append(f"⚠️  MISSING SECRETS ({len(missing_secrets)}):")
+                for s in missing_secrets:
+                    lines.append(f"  {s.key} (set via environment variable)")
+                lines.append("")
+            else:
+                lines.append(f"✅ SECRETS ({len(self.required_secrets)}):")
+                for s in self.required_secrets:
+                    lines.append(f"  [✓] {s.key}")
+                lines.append("")
 
         if self.errors:
             lines.append(f"❌ ERRORS ({len(self.errors)}):")
@@ -113,7 +176,6 @@ class PlanResult:
 def plan(
     dag: Dag,
     *,
-    params: dict[str, Any] | None = None,
     variables: dict[str, Any] | None = None,
     logical_date: datetime | None = None,
     data_interval_start: datetime | None = None,
@@ -126,11 +188,11 @@ def plan(
       1. All plugins exist in registry
       2. DAG graph is acyclic (no cycles)
       3. All upstream and teardown references to exist
-      4. Jinja template rendering with provided params / variables / dates
+      4. Jinja template rendering with provided variables / dates
+      5. Required variables and secrets are detected and validated
 
     Args:
         dag: The DAG model to validate.
-        params: Runtime parameters to simulate (merged over DAG-level defaults).
         variables: Variables (from variables.yml) to simulate.
         logical_date: Simulated logical_date for ``runtime.*`` rendering.
             Defaults to ``datetime.now()``.
@@ -145,9 +207,9 @@ def plan(
             both default to ``logical_date``.
 
     Returns:
-        PlanResult with errors, warnings, and per-task resolved inputs.
+        PlanResult with errors, warnings, required variables/secrets,
+        and per-task resolved inputs.
     """
-    params = params or {}
     variables = variables or {}
     logical_date = logical_date or datetime.now()
     result = PlanResult(dag_id=dag.id)
@@ -161,10 +223,6 @@ def plan(
             dis = data_interval_start
         if data_interval_end is not None:
             die = data_interval_end
-
-    # Merge DAG-level param defaults, then caller-supplied params win.
-    effective_params: dict[str, Any] = {p.name: p.default for p in dag.params}
-    effective_params.update(params)
 
     from .core.remote_plugin import is_remote_ref, ref_to_plugin_name
 
@@ -194,7 +252,7 @@ def plan(
             # Remote plugin — installed at runtime via uv. Not an error.
             result.warnings.append(
                 f"[{task_id}] Remote plugin {ref!r} will be installed "
-                f"via 'uv pip install' before this task runs."
+                f"via 'uv run --with' before this task runs."
             )
         elif ref_to_plugin_name(ref) in PLUGINS_REGISTRY:
             pass  # plain name that happens to match lookup key — fine
@@ -258,7 +316,14 @@ def plan(
     if not cycle:
         result.task_order = _topological_sort(task_map)
 
-    # --- Check 5: Resolve inputs with Jinja (best-effort) ---
+    # --- Check 5: Detect required variables and secrets ---
+    all_inputs = _collect_all_inputs(task_map)
+    result.required_variables = _detect_required_variables(
+        all_inputs, variables
+    )
+    result.required_secrets = _detect_required_secrets(all_inputs)
+
+    # --- Check 6: Resolve inputs with Jinja (best-effort) ---
     for task_id, action in task_map.items():
         plugin_name = (
             action.uses
@@ -267,7 +332,6 @@ def plan(
         )
         rendered_inputs, warnings = _render_inputs(
             action.inputs,
-            effective_params,
             variables,
             logical_date,
             dis,
@@ -393,9 +457,110 @@ def _compute_data_interval(
     return logical_date, data_interval_end
 
 
+def _collect_all_inputs(task_map: dict[str, Any]) -> list[tuple[str, Any]]:
+    """Collect all input values from all tasks for analysis.
+
+    Returns list of (task_id, value) pairs for all input values.
+    """
+    all_inputs: list[tuple[str, Any]] = []
+    for task_id, action in task_map.items():
+        for key, value in action.inputs.items():
+            all_inputs.append((task_id, value))
+    return all_inputs
+
+
+def _detect_required_variables(
+    all_inputs: list[tuple[str, Any]],
+    variables: dict[str, Any],
+) -> list[RequiredVariable]:
+    """Extract required variables from Jinja templates.
+
+    Parses ``{{ vars("key") }}`` and ``{{ vars("key", "default") }}`` patterns
+    to determine what variables the DAG needs.
+    """
+    # Pattern matches: vars("key") or vars("key", "default")
+    # Also matches: vars("nested.key")
+    vars_pattern = re.compile(
+        r'vars\s*\(\s*["\']([^"\']+)["\'](?:\s*,\s*([^)]+))?\s*\)'
+    )
+
+    required: dict[str, RequiredVariable] = {}
+
+    for task_id, value in all_inputs:
+        if not isinstance(value, str):
+            continue
+
+        for match in vars_pattern.finditer(value):
+            key = match.group(1)
+            default_arg = match.group(2)
+
+            # Check if nested key exists in variables
+            found_in = None
+            if "." in key:
+                parts = key.split(".")
+                v = variables
+                found = True
+                for part in parts:
+                    if isinstance(v, dict) and part in v:
+                        v = v[part]
+                    else:
+                        found = False
+                        break
+                if found:
+                    found_in = "variables"
+            elif key in variables:
+                found_in = "variables"
+
+            if key not in required:
+                required[key] = RequiredVariable(
+                    key=key,
+                    has_default=default_arg is not None,
+                    found_in=found_in,
+                    default_value=ast.literal_eval(default_arg.strip())
+                    if default_arg and default_arg.strip()
+                    else None,
+                )
+            else:
+                # If any usage has no default, the variable is required
+                if default_arg is None:
+                    required[key].has_default = False
+                if found_in and required[key].found_in is None:
+                    required[key].found_in = found_in
+
+    return sorted(required.values(), key=lambda v: v.key)
+
+
+def _detect_required_secrets(
+    all_inputs: list[tuple[str, Any]],
+) -> list[RequiredSecret]:
+    """Extract required secrets from Jinja templates.
+
+    Parses ``{{ secrets("KEY") }}`` patterns to determine what
+    environment variables the DAG needs.
+    """
+    import os
+
+    # Pattern matches: secrets("KEY")
+    secrets_pattern = re.compile(r'secrets\s*\(\s*["\']([^"\']+)["\']\s*\)')
+
+    required: dict[str, RequiredSecret] = {}
+
+    for task_id, value in all_inputs:
+        if not isinstance(value, str):
+            continue
+
+        for match in secrets_pattern.finditer(value):
+            key = match.group(1)
+            found_in = "environment" if key in os.environ else None
+
+            if key not in required:
+                required[key] = RequiredSecret(key=key, found_in=found_in)
+
+    return sorted(required.values(), key=lambda s: s.key)
+
+
 def _render_inputs(
     inputs: dict,
-    params: dict,
     variables: dict,
     logical_date: datetime,
     data_interval_start: datetime,
@@ -409,14 +574,14 @@ def _render_inputs(
     is shown even when stage variables are incomplete. Other undefined
     names are collected as warnings (likely a typo).
     """
-    from .core.renderer import Renderer
+    from .core.renderer import Renderer, make_vars_func, make_secrets_func
 
-    def vars_func(name: str) -> str:
-        return variables.get(name, f"<unresolved: vars('{name}')>")
+    vars_func = make_vars_func(variables)
+    secrets_func = make_secrets_func()
 
     ctx = {
-        "params": params,
         "vars": vars_func,
+        "secrets": secrets_func,
         "outputs": {},
         "runtime": build_runtime_dict(
             run_id=f"plan-{dag_id}",

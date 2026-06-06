@@ -20,7 +20,7 @@ complexity.
 3. **Simple path is trivial.** Write a Python function, reference it
    with `uses: py`. No operator inheritance, no provider install.
 4. **Reusable DAGs.** A `Dag` is *what to do*; a `Deployment` is
-   *how/when* (cron, params, variable overrides). 1 DAG → N Deployments.
+   *how/when* (cron, variable overrides). 1 DAG → N Deployments.
 5. **Executor-agnostic.** `TaskContext` is serializable; the same task
    runs on local / Docker / K8s / Batch unchanged.
 6. **Stateless runtime.** All state in the metadata store. Restart-safe.
@@ -123,10 +123,10 @@ Plugin ──── execution logic (execute + teardown)
 Action ──── references a plugin via `uses`, provides `inputs`
    │
    ▼         types: Task, Sensor, Branch, ShortCircuit, Group
-Dag ──────── reusable template: actions + deps + params + callbacks
+Dag ──────── reusable template: actions + deps + callbacks
    │
    ▼
-Deployment ─ binds a Dag to: cron + tz + params + variable_overrides
+Deployment ─ binds a Dag to: cron + tz + variable_overrides
              N Deployments → 1 Dag
 ```
 
@@ -136,15 +136,14 @@ Deployment ─ binds a Dag to: cron + tz + params + variable_overrides
 Dag(id="extract-load-table")
   │
   ├── Deployment(id="daily-customers-from-postgres",
-  │              cron="0 2 * * *", params={source: postgres}, owners=["tom"])
+  │              cron="0 2 * * *", variable_overrides={source: postgres}, owners=["tom"])
   └── Deployment(id="hourly-orders-from-mysql",
-                 cron="0 * * * *", params={source: mysql}, owners=["sara"])
+                 cron="0 * * * *", variable_overrides={source: mysql}, owners=["sara"])
 ```
 
 A `Deployment` carries:
 - Identity (`Deployment.id` shown in UI)
 - Schedule (`cron`, `start_date`, `end_date`, `timezone`, `catch_up`)
-- Runtime params (values for `Dag.params`)
 - Variable overrides (`variable_overrides` — layered on top of the
   bundle's scoped `variables.yml` / `global_variables.yml` chain)
 - Version pin (`dag_version`, optional)
@@ -287,13 +286,116 @@ The `uses` field resolves a plugin from the registry, in order:
 1. Built-in `PLUGINS_REGISTRY` (standard provider)
 2. Entry-point discovered plugins (`beacon.plugins` group in `pyproject.toml`)
 3. Local `./plugins/` directory (auto-discovered from bundle path)
-4. (Future) Remote registry with version pinning
+4. Remote plugins (`org/repo@version` or `package@version`)
 
 ```text
 uses: "py"                       → built-in
 uses: "gcs-extract"              → ./plugins/gcs_extract.py
-uses: "my-org/etl@1.2.0"         → remote (future)
+uses: "my-org/etl@1.2.0"         → remote (GitHub)
+uses: "beacon-gcs@2.0.0"         → remote (PyPI)
 ```
+
+### Remote Plugins
+
+Remote plugins run in **completely isolated** virtual environments managed by
+uv — they never touch Beacon's own dependencies. This mirrors how GitHub
+Actions work: the runner installs the action's deps on the fly, completely
+separate from the calling project.
+
+#### Ref formats
+
+| Format | Source | Example |
+|--------|--------|---------|
+| `org/repo@version` | GitHub | `my-org/gcs-plugin@1.2.0` |
+| `package@version` | PyPI | `beacon-gcs@2.0.0` |
+
+uv caches environments by their dependency hash, so the second call with the
+same ref reuses the cached env and does NOT re-download or re-install.
+
+#### Package requirements
+
+The remote package must expose its plugin(s) via the `beacon.plugins`
+entry-point group in its `pyproject.toml`:
+
+```toml
+[project.entry-points."beacon.plugins"]
+"my-org/gcs-plugin" = "my_package.gcs:run"
+```
+
+The value is `module_path:callable` where callable is either:
+
+* **A function** `run(inputs: dict, context: dict) -> dict | None`
+  — simple, no Beacon dependency needed.
+* **A class** that behaves like a Beacon plugin (has an `execute` method).
+  May extend `BasePlugin` (adds Beacon as a dep) or be a plain class.
+
+#### Exit code contract (remote → Beacon control flow)
+
+Remote plugins use `sys.exit(code)` to signal control flow to Beacon:
+
+| Exit code | Constant | Behavior |
+|-----------|----------|----------|
+| `0` | `EXIT_SUCCESS` | Success (default when function returns normally) |
+| `1` | `EXIT_FAILURE` | Generic failure, retry up to `retries` |
+| `2` | `EXIT_TASK_FAILED` | Permanent failure, skip retries |
+| `3` | `EXIT_TASK_SKIPPED` | Mark task SKIPPED |
+| `4` | `EXIT_TASK_RETRY` | Explicit retry requested |
+
+Example remote plugin (function-based, no Beacon dependency):
+
+```python
+# my_package/gcs.py
+import sys
+
+def run(inputs: dict, context: dict) -> dict:
+    """Copy files from GCS."""
+    bucket = inputs["bucket"]
+    prefix = inputs.get("prefix", "")
+
+    if not bucket_exists(bucket):
+        print(f"Bucket {bucket} not found", file=sys.stderr)
+        sys.exit(2)  # TASK_FAILED — permanent, no retry
+
+    files = list_files(bucket, prefix)
+    if not files:
+        sys.exit(3)  # TASK_SKIPPED — nothing to do
+
+    copied = copy_files(files, inputs["dest_bucket"])
+    return {"files_copied": len(copied)}
+```
+
+Example remote plugin (class-based, with Beacon dependency):
+
+```python
+# my_package/gcs.py
+from beacon import BasePlugin, Context, TaskFailed, TaskSkipped
+
+class GcsCopy(BasePlugin, plugin_name="my-org/gcs-copy"):
+    bucket: str
+    dest_bucket: str
+    prefix: str = ""
+
+    async def execute(self, context: Context) -> dict:
+        if not bucket_exists(self.bucket):
+            raise TaskFailed(f"Bucket {self.bucket} not found")
+
+        files = list_files(self.bucket, self.prefix)
+        if not files:
+            raise TaskSkipped("no files to copy")
+
+        copied = copy_files(files, self.dest_bucket)
+        return {"files_copied": len(copied)}
+```
+
+#### When to use remote plugins
+
+| Use case | Recommendation |
+|----------|----------------|
+| Internal team plugin | Local `./plugins/` or entry-point package |
+| Shared org plugin | Remote from GitHub `org/repo@version` |
+| Third-party plugin | Remote from PyPI `package@version` |
+| Plugin needs different deps than Beacon | Remote (isolated env) |
+| Plugin needs specific Python version | Remote (isolated env) |
 
 
 ### Two ways to add logic
@@ -542,8 +644,21 @@ callbacks:
 | `OnDagEvent`  | `start`, `success`, `failure`, `finished`         |
 
 `finished` fires on any DAG terminal state (success or failure).
-Resolution mirrors plugins: registry name, `org/name@version`, or a
-direct class reference (Python only).
+
+#### Hook resolution
+
+The `hook` field resolves the same way as plugin `uses`:
+
+| Hook format | Resolution |
+|-------------|------------|
+| `"my-callback"` | Local registry or `./plugins/` |
+| `"my-org/callback@1.1.0"` | Remote from GitHub |
+| `"beacon-slack@2.0.0"` | Remote from PyPI |
+| `MyCallback` (class) | Direct Python reference |
+
+Remote hooks run in isolated uv environments, same as remote plugins.
+The hook package must expose a `beacon.plugins` entry point matching the
+hook name.
 
 ---
 
@@ -770,9 +885,10 @@ never see Jinja.
 ```yaml
 # ✅ Supported
 inputs:
-  source: "{{ params.source_system }}"
-  path:   "{{ params.base_path }}/{{ params.date }}"
+  source: "{{ vars('source_system') }}"
+  path:   "{{ vars('base_path') }}/{{ runtime.logical_date }}"
   bucket: "{{ vars('gcs_bucket') }}"
+  api_key: "{{ secrets('API_KEY') }}"
   rows:   "{{ outputs.extract.row_count }}"
 
 # ❌ Intentionally not supported (control flow in graph definitions)
@@ -788,17 +904,22 @@ can't be statically validated, versioned, or shown in a UI.
 One class — `beacon.core.Renderer` — handles every template in beacon.
 
 ```python
-from beacon.core import Renderer
+from beacon.core import Renderer, make_vars_func, make_secrets_func
+
+variables = {"source": "postgres", "bucket": "my-bucket"}
+vars_func = make_vars_func(variables)
+secrets_func = make_secrets_func()
+
 r = Renderer({
-    "params":  {"source": "postgres", "date": "2026-06-04"},
-    "vars":    lambda name: my_variables.get(name),
+    "vars":    vars_func,
+    "secrets": secrets_func,
     "outputs": {"extract": {"row_count": 42}},
     "runtime": {...},
 })
 
-r.render("{{ params.source }}")                   # "postgres"
-r.render({"q": "SELECT * FROM {{ params.source }}_t"})
-# → {"q": "SELECT * FROM postgres_t"}
+r.render("{{ vars('source') }}")                   # "postgres"
+r.render("{{ vars('db.host', 'localhost') }}")     # nested key with default
+r.render("{{ secrets('API_KEY') }}")               # from environment
 ```
 
 Properties:
@@ -813,12 +934,23 @@ Properties:
   `<unresolved: vars('foo')>` to allow plan with partial stage data.)
 - **Cached.** Module-level template cache (size 400).
 
+### Template Functions
+
+| Function | Description |
+|----------|-------------|
+| `vars('key')` | Access variable from scoped chain |
+| `vars('key.nested.subkey')` | Nested key access via dot notation |
+| `vars('key', 'default')` | Access with fallback default value |
+| `secrets('KEY')` | Access environment variable |
+| `outputs.task_id.key` | Access upstream task output |
+| `runtime.key` | Access run-time metadata |
+
 ### Namespaces
 
 | Namespace                | When                              | What                                        |
 |--------------------------|-----------------------------------|---------------------------------------------|
-| `params.KEY`             | trigger time → enqueue            | Concrete `TaskContext.params`               |
 | `vars('KEY')`            | trigger time → enqueue            | Lookup into active stage of `variables.yml` |
+| `secrets('KEY')`         | trigger time → enqueue            | Environment variable |
 | `outputs.TASK_ID.KEY`    | pre-execute (worker, late-bind)   | Dict outputs returned by an upstream task   |
 | `runtime.KEY`            | trigger time → enqueue            | Run identity + time (see below)             |
 
@@ -838,8 +970,8 @@ Properties:
 ### Render pipeline (two binding sites)
 
 ```text
-┌─ 1. Trigger-time render ─ beacon/runner.py: _submit_action ──────────┐
-│    ctx = {params, vars, runtime, outputs={}}                         │
+┌─ 1. Trigger-time render ─ beacon/runner.py: _enqueue ────────────────┐
+│    ctx = {vars, secrets, runtime, outputs={}}                        │
 │    rendered = Renderer(ctx).render(task.inputs)                      │
 │    → stored on TaskContext.inputs                                    │
 │    Failures here (typically because input references outputs.* of    │
@@ -849,10 +981,10 @@ Properties:
 │    - load each upstream's TaskContext.outputs into                   │
 │      task_ctx.upstream_outputs                                       │
 │    - re-render task_ctx.inputs with `outputs` namespace bound        │
-│      (vars is already resolved from site 1)                          │
+│      (vars/secrets already resolved from site 1)                     │
 │    → stored back on TaskContext.inputs, plugin instantiates          │
 ├─ 3. Plan render ───────── beacon/plan.py                            │
-│    Same as site 1 but failures become `DryrunResult.warnings`.       │
+│    Same as site 1 but failures become `PlanResult.warnings`.         │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -873,14 +1005,11 @@ id: daily-customers
 dag_id: extract-load-table
 variable_overrides:                  # optional pinning
   alert_path: /var/oncall
-params:
-  source: "{{ vars('source_system') }}"
-  bucket: "{{ vars('gcs_bucket') }}"
 
 Trigger: scheduler resolves vars against scoped chain
    (deployment overrides → dag variables.yml → group global_variables.yml
     → bundle global_variables.yml)
-   → TaskContext.params = {source: "postgres", bucket: "my-prod-bucket"}
+   → TaskContext.variables = {source_system: "postgres", gcs_bucket: "my-prod-bucket", ...}
 
 DAG action: inputs templated, then resolved
    extract.inputs   = {py_statement: "./extract.py", table: "postgres_events",
@@ -900,14 +1029,16 @@ mixed:      "prefix-{{ x }}"  x=5  # "prefix-5" (mixed → str)
 
 | You want…                   | Write                              |
 |-----------------------------|------------------------------------|
-| Stage variable              | `{{ vars('key') }}`                |
-| Deployment / DAG param      | `{{ params.key }}`                 |
+| Variable from scope         | `{{ vars('key') }}`                |
+| Variable with default       | `{{ vars('key', 'default') }}`     |
+| Nested variable             | `{{ vars('db.host') }}`            |
+| Secret from environment     | `{{ secrets('API_KEY') }}`         |
 | Upstream task output        | `{{ outputs.task_id.key }}`        |
 | Logical date                | `{{ runtime.logical_date }}`       |
 | Run id                      | `{{ runtime.run_id }}`             |
 | Math / coerced literal      | `{{ 1024 * 1024 }}`                |
-| Inline default              | `{{ params.maybe or 'fallback' }}` |
-| Jinja filter                | `{{ params.name \| upper }}`       |
+| Inline default              | `{{ vars('maybe', 'fallback') }}`  |
+| Jinja filter                | `{{ vars('name') \| upper }}`      |
 
 ### Dynamic tasks (`for_each` — Phase 3)
 
@@ -916,12 +1047,12 @@ actions:
   - id: "process-{{ item }}"
     type: task
     uses: py
-    for_each: "{{ params.source_systems }}"
+    for_each: "{{ vars('source_systems') }}"
     inputs: { source_system: "{{ item }}" }
 ```
 
-At trigger time the scheduler resolves `for_each` against runtime
-params → gets a list → generates N `TaskContext` instances, each
+At trigger time the scheduler resolves `for_each` against variables
+→ gets a list → generates N `TaskContext` instances, each
 independently scheduled, retried, tracked.
 
 ---

@@ -78,7 +78,7 @@ class MetadataProtocol(Protocol):
         dag_version: str,
         state: str = "running",
         logical_date: datetime | None = None,
-        params: dict[str, Any] | None = None,
+        variables: dict[str, Any] | None = None,
     ) -> None: ...
 
     async def get_dag_run(
@@ -137,8 +137,8 @@ class Context(TypedDict, total=False):
     """Data Interval End."""
 
     # Data
-    params: dict[str, Any]
-    """DAG params (Jinja-rendered with vars at trigger time)."""
+    variables: dict[str, Any]
+    """Variables from scoped chain + run-time overrides."""
 
     # Attempt info
     attempt_number: int

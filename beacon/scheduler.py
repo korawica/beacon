@@ -155,7 +155,7 @@ class DeploymentScheduler:
         for t in await self.meta.drain_triggers():
             await self._fire(
                 deployment_id=t["deployment_id"],
-                override_params=t.get("params") or {},
+                override_variables=t.get("variables") or {},
                 logical_date=now,
                 trigger="manual",
             )
@@ -197,7 +197,7 @@ class DeploymentScheduler:
 
         await self._fire(
             deployment_id=dep["id"],
-            override_params={},
+            override_variables={},
             logical_date=due,
             trigger="scheduled",
         )
@@ -211,7 +211,7 @@ class DeploymentScheduler:
         self,
         *,
         deployment_id: str,
-        override_params: dict[str, Any],
+        override_variables: dict[str, Any],
         logical_date: datetime,
         trigger: str,
     ) -> None:
@@ -235,9 +235,7 @@ class DeploymentScheduler:
             )
             return
 
-        params = {**(dep.get("params") or {}), **override_params}
-
-        # Resolve variables = scoped bundle vars + deployment overrides.
+        # Resolve variables = scoped bundle vars + deployment overrides + run-time overrides.
         variables: dict[str, Any] = {}
         if self._variable_scope is not None and dag._source_file is not None:
             try:
@@ -252,6 +250,8 @@ class DeploymentScheduler:
             variables = merge_with_overrides(
                 scoped, dep.get("variable_overrides") or {}
             )
+        # Apply run-time overrides (from manual trigger)
+        variables = {**variables, **override_variables}
 
         if trigger == "scheduled":
             run_id = (
@@ -267,7 +267,6 @@ class DeploymentScheduler:
                 dag=dag,
                 run_id=run_id,
                 logical_date=logical_date,
-                params=params,
                 variables=variables,
                 trigger=trigger,
             )
@@ -282,7 +281,6 @@ class DeploymentScheduler:
         dag: Dag,
         run_id: str,
         logical_date: datetime,
-        params: dict[str, Any],
         variables: dict[str, Any],
         trigger: str,
     ) -> None:
@@ -302,7 +300,7 @@ class DeploymentScheduler:
                     bundle_root=self._bundle_root,
                 )
                 result = await runner.run(
-                    params=params,
+                    variables=variables,
                     run_id=run_id,
                     logical_date=logical_date,
                 )

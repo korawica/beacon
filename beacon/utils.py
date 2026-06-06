@@ -1,3 +1,5 @@
+import hashlib
+import pickle
 import re
 from re import DOTALL, VERBOSE
 
@@ -39,3 +41,16 @@ def to_snake_case(value: str) -> str:
     """
     value = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", value)
     return re.sub("([a-z0-9])([A-Z])", r"\1_\2", value).lower()
+
+
+def get_object_checksum(obj):
+    """Calculate the checksum of a Python object.
+
+    >>> get_object_checksum([{"a": 1, "b": 2}, (3, 4), "hello"])
+    """
+    # Serialize the object to a stable byte sequence
+    # Note: protocol=0 ensures higher text-based determinism across platforms
+    obj_bytes = pickle.dumps(obj, protocol=0)
+
+    # Generate a SHA-256 hash string
+    return hashlib.sha256(obj_bytes).hexdigest()

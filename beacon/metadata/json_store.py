@@ -62,7 +62,7 @@ class LocalMetadata:
         dag_version: str,
         state: str = "running",
         logical_date: datetime | None = None,
-        params: dict[str, Any] | None = None,
+        variables: dict[str, Any] | None = None,
     ) -> None:
         data = {
             "run_id": run_id,
@@ -70,7 +70,7 @@ class LocalMetadata:
             "dag_version": dag_version,
             "state": state,
             "logical_date": str(logical_date) if logical_date else None,
-            "params": params or {},
+            "variables": variables or {},
             "created_at": str(datetime.now()),
             "ended_at": None,
         }
@@ -356,7 +356,7 @@ class LocalMetadata:
     async def enqueue_trigger(
         self,
         deployment_id: str,
-        params: dict[str, Any] | None = None,
+        variables: dict[str, Any] | None = None,
     ) -> str:
         """Write a pending manual-trigger request. Returns the trigger id."""
         trigger_id = uuid.uuid4().hex[:12]
@@ -366,7 +366,7 @@ class LocalMetadata:
             {
                 "trigger_id": trigger_id,
                 "deployment_id": deployment_id,
-                "params": params or {},
+                "variables": variables or {},
                 "created_at": datetime.now().isoformat(),
             },
         )

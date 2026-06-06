@@ -13,13 +13,6 @@ from ._shared import parse_kv_options
 @click.argument("path", type=click.Path(exists=True, dir_okay=True))
 @click.option("--dag-id", default=None, help="Pick a DAG when PATH has many.")
 @click.option(
-    "--param",
-    "params",
-    multiple=True,
-    metavar="KEY=VALUE",
-    help="Run param (repeatable).",
-)
-@click.option(
     "--var",
     "variables",
     multiple=True,
@@ -37,7 +30,6 @@ from ._shared import parse_kv_options
 def run(
     path: str,
     dag_id: str | None,
-    params: tuple[str, ...],
     variables: tuple[str, ...],
     metadata_path: str | None,
 ) -> None:
@@ -45,7 +37,6 @@ def run(
     dag = load_one_dag(path, dag_id=dag_id)
     meta_path = metadata_path or get("BEACON_METADATA_PATH")
     result = dag.run(
-        params=parse_kv_options(params),
         variables=parse_kv_options(variables),
         metadata_path=meta_path,
     )

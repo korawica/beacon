@@ -92,13 +92,13 @@ class TaskContext(BaseModel):
     data_interval_end: datetime = Field(description="Data interval end")
 
     # --- Inputs (resolved at enqueue time) ---
-    params: dict[str, Any] = Field(
+    variables: dict[str, Any] = Field(
         default_factory=dict,
-        description="DAG params, Jinja-rendered with vars at trigger time",
+        description="Variables from scoped chain + run-time overrides",
     )
     inputs: dict[str, Any] = Field(
         default_factory=dict,
-        description="Task inputs, Jinja-rendered with params at pre-execute",
+        description="Task inputs, Jinja-rendered with vars/secrets at pre-execute",
     )
     plugin_name: str = Field(
         description="Resolved plugin name to execute",

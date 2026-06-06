@@ -95,7 +95,7 @@ class OnTaskEvent(_CachedHookMixin):
             "dag_id": task_ctx.dag_id,
             "task_id": task_ctx.task_id,
             "attempt": task_ctx.attempt_number,
-            "params": task_ctx.params,
+            "variables": task_ctx.variables,
         }
         if task_ctx.last_attempt and task_ctx.last_attempt.error:
             data["error"] = task_ctx.last_attempt.error
