@@ -35,6 +35,7 @@ from .callback import OnDagEvent
 from .core.action import BaseAction, DownstreamDirective
 from .core.context import build_runtime_dict
 from .core.executor import BaseExecutor, LocalExecutor
+from .core.graph import Graph, build_graph, collect_self_and_downstream
 from .core.renderer import Renderer
 from .core.state import TERMINAL_STATES, TaskState
 from .core.task_context import TaskContext
@@ -48,84 +49,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger("beacon.runner")
 
 
-# ---------- helpers --------------------------------------------------------
-
-
-def _flatten_actions(actions: list[Any], out: dict[str, BaseAction]) -> None:
-    """Flatten Groups; collect leaf actions into ``out`` keyed by id."""
-    for action in actions:
-        if hasattr(action, "actions") and action.actions:
-            _flatten_actions(action.actions, out)
-        else:
-            out[action.id] = action
-
-
-@dataclass
-class _Graph:
-    """Pre-computed DAG topology."""
-
-    task_map: dict[str, BaseAction]
-    downstream: dict[str, list[str]]
-    teardown_for_setup: dict[str, str]
-    """setup_id → teardown_id"""
-    teardown_setup: dict[str, str]
-    """teardown_id → setup_id"""
-    teardown_deps: dict[str, set[str]]
-    """teardown_id → {setup_id + all transitive non-teardown dependents}"""
-
-    @property
-    def teardown_ids(self) -> set[str]:
-        return set(self.teardown_setup)
-
-    @property
-    def normal_ids(self) -> set[str]:
-        return set(self.task_map) - self.teardown_ids
-
-
-def _build_graph(dag: Dag) -> _Graph:
-    task_map: dict[str, BaseAction] = {}
-    _flatten_actions(dag.actions, task_map)
-
-    downstream: dict[str, list[str]] = {tid: [] for tid in task_map}
-    for tid, action in task_map.items():
-        for up in action.upstream:
-            if up in downstream:
-                downstream[up].append(tid)
-
-    teardown_for_setup: dict[str, str] = {}
-    teardown_setup: dict[str, str] = {}
-    for tid, action in task_map.items():
-        td = getattr(action, "teardown", None)
-        if td:
-            teardown_for_setup[td] = tid
-            teardown_setup[tid] = td
-
-    teardown_ids = set(teardown_setup)
-
-    def transitive_dependents(setup_id: str) -> set[str]:
-        seen: set[str] = set()
-        stack = [setup_id]
-        while stack:
-            n = stack.pop()
-            for d in downstream.get(n, []):
-                if d in teardown_ids or d in seen:
-                    continue
-                seen.add(d)
-                stack.append(d)
-        return seen
-
-    teardown_deps: dict[str, set[str]] = {
-        tdid: {setup_id} | transitive_dependents(setup_id)
-        for setup_id, tdid in teardown_for_setup.items()
-    }
-
-    return _Graph(
-        task_map=task_map,
-        downstream=downstream,
-        teardown_for_setup=teardown_for_setup,
-        teardown_setup=teardown_setup,
-        teardown_deps=teardown_deps,
-    )
+# ---------- Graph import (see core/graph.py) -------------------------------
 
 
 # ---------- result ---------------------------------------------------------
@@ -253,7 +177,7 @@ class DagRunner:
         # Merge runner's variables with run-time overrides
         effective_variables = {**self.variables, **(variables or {})}
         now = logical_date or datetime.now()
-        graph = _build_graph(self.dag)
+        graph = build_graph(self.dag.actions)
         result = DagRunResult(run_id=run_id, dag_id=self.dag.id)
 
         if resume:
@@ -388,7 +312,7 @@ class DagRunner:
     async def _main_loop(
         self,
         *,
-        graph: _Graph,
+        graph: Graph,
         worker: Worker,
         local_states: dict[str, TaskState],
         forced_skip: set[str],
@@ -437,7 +361,7 @@ class DagRunner:
     async def _enqueue_ready(
         self,
         *,
-        graph: _Graph,
+        graph: Graph,
         worker: Worker,
         candidate_ids: set[str],
         local_states: dict[str, TaskState],
@@ -527,7 +451,7 @@ class DagRunner:
         tid: str,
         action: BaseAction,
         worker: Worker,
-        graph: _Graph,
+        graph: Graph,
         local_states: dict[str, TaskState],
         variables: dict[str, Any],
         run_id: str,
@@ -634,7 +558,7 @@ class DagRunner:
 
     def _compute_dag_state(
         self,
-        graph: _Graph,
+        graph: Graph,
         local_states: dict[str, TaskState],
     ) -> str:
         """Compute DagRun terminal state ignoring teardown outcomes."""
@@ -710,7 +634,7 @@ class DagRunner:
         if isinstance(task_ids, str):
             task_ids = [task_ids]
 
-        graph = _build_graph(self.dag)
+        graph = build_graph(self.dag.actions)
         for tid in task_ids:
             if tid not in graph.task_map:
                 raise ValueError(
@@ -720,7 +644,7 @@ class DagRunner:
         to_clear: list[str] = []
         seen: set[str] = set()
         for tid in task_ids:
-            for resolved in _collect_self_and_downstream(
+            for resolved in collect_self_and_downstream(
                 graph, tid, include_downstream=downstream
             ):
                 if resolved not in seen:
@@ -779,7 +703,7 @@ class DagRunner:
         if isinstance(task_ids, str):
             task_ids = [task_ids]
 
-        graph = _build_graph(self.dag)
+        graph = build_graph(self.dag.actions)
         for tid in task_ids:
             if tid not in graph.task_map:
                 raise ValueError(
@@ -810,26 +734,6 @@ class DagRunner:
             teardowns_cleared,
         )
         return {"marked": task_ids, "teardowns_cleared": teardowns_cleared}
-
-
-def _collect_self_and_downstream(
-    graph: _Graph, root: str, *, include_downstream: bool
-) -> list[str]:
-    """Return ``[root]`` plus, optionally, every transitive downstream."""
-    if not include_downstream:
-        return [root]
-    order: list[str] = [root]
-    seen: set[str] = {root}
-    queue: list[str] = [root]
-    while queue:
-        current = queue.pop(0)
-        for child in graph.downstream.get(current, []):
-            if child in seen:
-                continue
-            seen.add(child)
-            order.append(child)
-            queue.append(child)
-    return order
 
 
 # --- run_id trigger convention ---------------------------------------------

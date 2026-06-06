@@ -12,15 +12,17 @@ need them.
 """
 
 from .action import BaseAction
-from .context import Context, MetadataProtocol
+from .context import Context
 from .executor import BaseExecutor, LocalExecutor
+from .graph import Graph, build_graph, flatten_actions
 from .plugin import (
     PLUGINS_REGISTRY,
     BasePlugin,
     register_plugin,
 )
+from .protocols import MetadataProtocol
 from .renderer import Renderer
-from .state import TaskState
+from .state import TaskState, is_terminal, can_transition
 from .task_context import TaskContext
 from .trigger_rule import TriggerRule
 
@@ -28,7 +30,12 @@ __all__ = (
     "BaseAction",
     "BaseExecutor",
     "BasePlugin",
+    "build_graph",
+    "can_transition",
     "Context",
+    "flatten_actions",
+    "Graph",
+    "is_terminal",
     "LocalExecutor",
     "MetadataProtocol",
     "PLUGINS_REGISTRY",

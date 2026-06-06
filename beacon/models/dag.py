@@ -323,8 +323,9 @@ class Dag(BaseModel):
         """
         from croniter import croniter
 
+        from ..core.graph import build_graph
         from ..metadata.json_store import LocalMetadata
-        from ..runner import DagRunner, _build_graph
+        from ..runner import DagRunner
 
         if end_date < start_date:
             raise ValueError(
@@ -338,7 +339,7 @@ class Dag(BaseModel):
             max_concurrent=max_concurrent,
             variables=variables or {},
         )
-        graph = _build_graph(self)
+        graph = build_graph(self.actions)
         all_task_ids = list(graph.task_map)
 
         # Enumerate cron ticks in [start_date, end_date].

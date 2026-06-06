@@ -21,8 +21,9 @@ import logging
 from dataclasses import dataclass, field
 
 from .callback import OnTaskEvent
-from .core.context import MetadataProtocol, build_runtime_dict
+from .core.context import build_runtime_dict
 from .core.executor import BaseExecutor, LocalExecutor
+from .core.protocols import MetadataProtocol
 from .core.state import TaskState
 from .core.task_context import AttemptStatus, TaskContext
 

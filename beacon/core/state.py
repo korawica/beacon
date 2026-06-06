@@ -47,3 +47,73 @@ TERMINAL_STATES: frozenset[TaskState] = frozenset(
         TaskState.REMOVED,
     }
 )
+
+
+# =============================================================================
+# State Helpers
+# =============================================================================
+
+
+def is_terminal(state: TaskState) -> bool:
+    """Check if a state is terminal (no further transitions possible).
+
+    Args:
+        state: The task state to check.
+
+    Returns:
+        True if the state is terminal, False otherwise.
+
+    Example:
+        >>> is_terminal(TaskState.SUCCESS)
+        True
+        >>> is_terminal(TaskState.RUNNING)
+        False
+    """
+    return state in TERMINAL_STATES
+
+
+def can_transition(from_state: TaskState, to_state: TaskState) -> bool:
+    """Check if a state transition is valid.
+
+    This is a helper for logging and debugging — the runner/worker do not
+    enforce transitions at runtime. It documents the expected state machine.
+
+    Args:
+        from_state: The current state.
+        to_state: The target state.
+
+    Returns:
+        True if the transition is valid, False otherwise.
+
+    Example:
+        >>> can_transition(TaskState.NONE, TaskState.SCHEDULED)
+        True
+        >>> can_transition(TaskState.SUCCESS, TaskState.FAILED)
+        False
+    """
+    VALID_TRANSITIONS: dict[TaskState, frozenset[TaskState]] = {
+        TaskState.NONE: frozenset(
+            {
+                TaskState.SCHEDULED,
+                TaskState.SKIPPED,
+                TaskState.UPSTREAM_FAILED,
+            }
+        ),
+        TaskState.SCHEDULED: frozenset({TaskState.QUEUED}),
+        TaskState.QUEUED: frozenset({TaskState.RUNNING}),
+        TaskState.RUNNING: frozenset(
+            {
+                TaskState.SUCCESS,
+                TaskState.FAILED,
+                TaskState.SKIPPED,
+                TaskState.UP_FOR_RETRY,
+            }
+        ),
+        TaskState.UP_FOR_RETRY: frozenset(
+            {
+                TaskState.QUEUED,
+                TaskState.FAILED,
+            }
+        ),
+    }
+    return to_state in VALID_TRANSITIONS.get(from_state, frozenset())

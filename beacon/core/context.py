@@ -5,15 +5,13 @@ It provides runtime information without coupling plugins to internal models.
 
 For persistent task state across retries and remote executors, see
 `beacon.core.task_context.TaskContext`.
+
+For the metadata store protocol, see `beacon.core.protocols.MetadataProtocol`.
 """
 
 import logging
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Protocol, TypedDict
-
-if TYPE_CHECKING:
-    from .state import TaskState
-    from .task_context import TaskContext
+from typing import Any, TypedDict
 
 
 # =============================================================================
@@ -62,48 +60,6 @@ def build_runtime_dict(
         "data_interval_end": data_interval_end,
         "attempt_number": attempt_number,
     }
-
-
-class MetadataProtocol(Protocol):
-    """Protocol that all metadata stores must satisfy.
-
-    Any class implementing these methods can be used as the metadata store
-    for the Worker, Scheduler, and API Server — without inheritance.
-    """
-
-    async def create_dag_run(
-        self,
-        run_id: str,
-        dag_id: str,
-        dag_version: str,
-        state: str = "running",
-        logical_date: datetime | None = None,
-        variables: dict[str, Any] | None = None,
-    ) -> None: ...
-
-    async def get_dag_run(
-        self, run_id: str, dag_id: str
-    ) -> dict[str, Any] | None: ...
-
-    async def update_dag_run_state(
-        self, run_id: str, dag_id: str, state: str
-    ) -> None: ...
-
-    async def put_task_context(
-        self, run_id: str, dag_id: str, task_id: str, task_ctx: TaskContext
-    ) -> None: ...
-
-    async def get_task_context(
-        self, run_id: str, dag_id: str, task_id: str
-    ) -> TaskContext | None: ...
-
-    async def set_task_state(
-        self, run_id: str, dag_id: str, task_id: str, state: TaskState
-    ) -> None: ...
-
-    async def get_task_state(
-        self, run_id: str, dag_id: str, task_id: str
-    ) -> TaskState | None: ...
 
 
 class Context(TypedDict, total=False):
