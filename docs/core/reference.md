@@ -10,7 +10,7 @@ scoping) and [`roadmap.md`](./roadmap.md) (status + production plan).
 ## 1. Positioning & Principles
 
 _Beacon_ is a lean, async-first workflow orchestrator. Target: teams that
-need production-grade orchestration without Airflow's operational
+need production-grade orchestration without _Airflow_'s operational
 complexity.
 
 1. **Async-first.** Every action executes via `async def execute()`.
